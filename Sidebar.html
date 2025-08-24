@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Weekly Builder</title>
+  <style>
+    body { font: 13px/1.4 Arial, sans-serif; padding:10px; }
+    h2 { margin:0 0 8px; }
+    label { display:block; margin-top:8px; font-weight:bold; }
+    input[type=text], select { width:100%; box-sizing:border-box; }
+    .status { display:flex; gap:8px; align-items:center; background:#fafafa; border:1px solid #e0e0e0; border-radius:6px; padding:6px 8px; margin:8px 0; }
+    .status.ok { background:#f1f8e9; border-color:#c8e6c9; }
+    .status.err { background:#ffebee; border-color:#ffcdd2; }
+    .spinner { width:12px; height:12px; border:2px solid #c7cdd1; border-top-color:#1a73e8; border-radius:50%; animation:spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg);} }
+    .grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); grid-gap:10px; }
+    .day { border:1px solid #ddd; border-radius:8px; padding:10px; }
+    .muted { color:#666; font-size:12px; }
+    .small { font-size:12px; }
+    .chips { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0; }
+    .chip { border:1px solid #ddd; border-radius:999px; padding:3px 8px; background:#f9f9f9; }
+    .cols { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    .box { border:1px solid #eee; border-radius:6px; padding:6px; max-height:170px; overflow:auto; }
+    .row { display:flex; align-items:center; gap:6px; padding:2px 0; }
+    .pill { display:inline-block; padding:4px 8px; margin:2px 6px 2px 0; border:1px solid #ddd; border-radius:999px; }
+    .pill input { vertical-align:middle; margin-right:6px; }
+    .hdr { font-weight:bold; margin:6px 0 4px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .footer { margin:8px 0; }
+    a { text-decoration: none; }
+  </style>
+</head>
+<body>
+  <h2>Weekly Builder</h2>
+  <div id="status" class="status"><span id="spin" class="spinner" style="display:none;"></span><span id="statusMsg">Loading…</span></div>
+
+  <div class="box"><b>Next un‑taught day:</b> <span id="nextDay" class="small">(loading)</span></div>
+
+  <div style="margin:0 0 6px 0;">
+    <button onclick="google.script.run.pe_openDialogWide()">Open Wide View</button>
+  </div>
+
+  <label>Calendar Week</label>
+  <select id="week" onchange="onWeekChanged(this.value)"></select>
+  <div class="small">From Weeks Sheet (Q#W#). Dates auto-fill below.</div>
+
+  <label>Dates (display only)</label>
+  <input id="dates" type="text" placeholder="e.g., Aug 19–22" />
+
+  <label>Meeting Days (choose any)</label>
+  <div>
+    <label class="pill"><input id="chkMon" type="checkbox" onchange="onDaysChanged()">Mon</label>
+    <label class="pill"><input id="chkTue" type="checkbox" onchange="onDaysChanged()">Tue</label>
+    <label class="pill"><input id="chkWed" type="checkbox" onchange="onDaysChanged()">Wed</label>
+    <label class="pill"><input id="chkThu" type="checkbox" onchange="onDaysChanged()">Thu</label>
+    <label class="pill"><input id="chkFri" type="checkbox" onchange="onDaysChanged()">Fri</label>
+  </div>
+
+  <div id="daysWrap"></div>
+
+  <div class="footer">
+    <button id="btnPreview" onclick="preview()">Preview</button>
+    <button id="btnBuild" onclick="build()">Build</button>
+  </div>
+
+  <div id="pv" class="box small"></div>
+
+  <script>
+    let STANDARDS=null, SUGGEST=[], WEEK_DATES={};
+
+    function setBusy(b){
+      ['btnPreview','btnBuild'].forEach(id=>{ const el=document.getElementById(id); if(el) el.disabled=b; });
+      document.getElementById('spin').style.display=b?'inline-block':'none';
+    }
+    function status(msg, ok){
+      const el=document.getElementById('status');
+      el.className='status'+(ok===true?' ok': ok===false?' err':'');
+      document.getElementById('statusMsg').textContent=msg;
+    }
+
+    function ocMeta(code){
+      return (STANDARDS.outcomes||[]).find(o=>o.code===code) || null;
+    }
+    function compMeta(oc, cc){
+      const arr = (STANDARDS.compsByOutcome||{})[oc] || [];
+      return arr.find(x=>x.code===cc) || null;
+    }
+
+    function init(){
+      status('Loading...');
+      google.script.run
+        .withSuccessHandler(function(payload){
+          const next=payload.next, weeks=payload.weeks, standards=payload.standards, suggest=payload.suggest;
+          STANDARDS=standards; SUGGEST=suggest||[];
+          const nextRow = next.rows[next.nextIndex] || next.rows[next.rows.length-1];
+          document.getElementById('nextDay').textContent = nextRow ? (nextRow.day+' — '+nextRow.title) : '(none)';
+
+          const sel=document.getElementById('week'); sel.innerHTML='';
+          WEEK_DATES={};
+          (weeks && weeks.length ? weeks : [{week:'Q1W1',dates:''}]).forEach(function(w){
+            const o=document.createElement('option');
+            o.value=w.week;
+            o.textContent = w.dates ? (w.week+' — '+w.dates) : w.week;
+            sel.appendChild(o);
+            WEEK_DATES[w.week]=w.dates||"";
+          });
+
+          // default: all days checked
+          ['Mon','Tue','Wed','Thu','Fri'].forEach(d=>{ const el=document.getElementById('chk'+d); if(el) el.checked=true; });
+
+          // Render days + immediately set dates for current week
+          renderDays();
+          if (sel.options.length) onWeekChanged(sel.value);
+
+          status('Ready.', true);
+        })
+        .withFailureHandler(function(e){ status('Init error: '+(e&&e.message?e.message:e), false); })
+        .pe_getWeeklyUIInit();
+    }
+    window.onload = init;
+
+    function selectedDays(){
+      const days=['Mon','Tue','Wed','Thu','Fri']; const out=[];
+      days.forEach(function(d){ const el=document.getElementById('chk'+d); if(el && el.checked) out.push(d); });
+      return out;
+    }
+
+    function onDaysChanged(){
+      const k = selectedDays().length || 5;
+      status('Updating suggestions…');
+      google.script.run
+        .withSuccessHandler(function(sug){ SUGGEST = sug || []; renderDays(); status('Ready.', true); })
+        .withFailureHandler(function(e){ status('Suggestion error: '+(e && e.message ? e.message : e), false); })
+        .pe_getSuggestionsForDays(k);
+    }
+
+    function renderDays(){
+      const wrap=document.getElementById('daysWrap'); wrap.innerHTML='';
+      const selDays=selectedDays();
+      const k=selDays.length || 5;
+      const grid=document.createElement('div'); grid.className='grid';
+
+      for(let i=0;i<k;i++){
+        const sug=SUGGEST[i] || {label:'D?'+(i+1), title:'(next)', outcomes:[], comps:[]};
+        const dname = selDays[i] || ['Mon','Tue','Wed','Thu','Fri'][i] || ('Day '+(i+1));
+
+        const card=document.createElement('div'); card.className='day';
+        const h=document.createElement('div');
+        h.innerHTML = '<b>'+dname+'</b> — <span class="mono">'+sug.label+'</span> — <i>'+sug.title+'</i>';
+        card.appendChild(h);
+
+        if (sug.outcomes && sug.outcomes.length){
+          const lbl=document.createElement('div'); lbl.className='muted'; lbl.textContent='Suggested (auto‑selected; adjust as needed):';
+          const chips=document.createElement('div'); chips.className='chips';
+          (sug.outcomes||[]).forEach(function(oc){
+            const meta=ocMeta(oc); const chip=document.createElement('span'); chip.className='chip mono';
+            chip.title = meta ? (meta.strandCode+' — '+meta.strandName+'\n'+oc+' — '+meta.title) : oc;
+            chip.textContent = oc; chips.appendChild(chip);
+            (sug.comps||[]).filter(function(cc){return cc.indexOf(oc+'.')===0;}).forEach(function(cc){
+              const cm=compMeta(oc, cc); const cchip=document.createElement('span'); cchip.className='chip mono';
+              cchip.title = cm ? (cc+' — '+cm.text) : cc;
+              cchip.textContent = cc; chips.appendChild(cchip);
+            });
+          });
+          card.appendChild(lbl); card.appendChild(chips);
+        }
+
+        const cols=document.createElement('div'); cols.className='cols';
+
+        // Outcomes column
+        const ocBox=document.createElement('div'); ocBox.className='box';
+        const ocHdr=document.createElement('div'); ocHdr.className='hdr'; ocHdr.textContent='Outcomes';
+        ocBox.appendChild(ocHdr);
+        (STANDARDS.outcomes||[]).forEach(function(o){
+          const id='d'+i+'_oc_'+o.code.replace(/\./g,'_');
+          const row=document.createElement('div'); row.className='row';
+          const cb=document.createElement('input'); cb.type='checkbox'; cb.id=id; cb.value=o.code;
+          if ((sug.outcomes||[]).indexOf(o.code)>=0) cb.checked=true; // auto‑select suggestion
+          cb.title = o.strandCode+' — '+o.strandName+'\n'+o.code+' — '+o.title;
+          const lab=document.createElement('label'); lab.setAttribute('for',id); lab.textContent=o.code; lab.title=cb.title;
+          row.appendChild(cb); row.appendChild(lab); ocBox.appendChild(row);
+          cb.addEventListener('change', function(){ renderCompetencies(i, dname); });
+        });
+
+        // Competencies column (auto from selected outcomes; precheck suggested)
+        const cpBox=document.createElement('div'); cpBox.className='box'; cpBox.id='cpBox_'+i;
+        const cpHdr=document.createElement('div'); cpHdr.className='hdr'; cpHdr.textContent='Competencies';
+        cpBox.appendChild(cpHdr);
+
+        cols.appendChild(ocBox); cols.appendChild(cpBox);
+        card.appendChild(cols); grid.appendChild(card);
+
+        renderCompetencies(i, dname, sug.comps || []); // pre-check suggested comps
+      }
+      wrap.appendChild(grid);
+    }
+
+    function getCheckedOutcomesFor(dayIndex){
+      const ocChecked=[];
+      document.querySelectorAll('[id^="d'+dayIndex+'_oc_"]').forEach(cb=>{ if(cb.checked) ocChecked.push(cb.value); });
+      return ocChecked;
+    }
+
+    function renderCompetencies(dayIndex, dname, precheckList){
+      const box=document.getElementById('cpBox_'+dayIndex);
+      if(!box) return;
+      [].slice.call(box.querySelectorAll('.row, .muted')).forEach(e=>e.remove());
+
+      const chosen = getCheckedOutcomesFor(dayIndex);
+      if(!chosen.length){
+        const empty=document.createElement('div'); empty.className='row muted'; empty.textContent='(Select outcomes to view competencies)';
+        box.appendChild(empty); return;
+      }
+      chosen.forEach(function(oc){
+        const meta = (STANDARDS.outcomes||[]).find(o=>o.code===oc);
+        const groupHdr=document.createElement('div'); groupHdr.className='muted';
+        groupHdr.textContent = meta ? (oc+' — '+meta.title) : oc;
+        groupHdr.title = meta ? (meta.strandCode+' — '+meta.strandName+'\n'+oc+' — '+meta.title) : oc;
+        box.appendChild(groupHdr);
+
+        ((STANDARDS.compsByOutcome||{})[oc]||[]).forEach(function(c){
+          const id='d'+dayIndex+'_cp_'+c.code.replace(/\./g,'_');
+          const row=document.createElement('div'); row.className='row';
+          const cb=document.createElement('input'); cb.type='checkbox'; cb.id=id; cb.value=c.code;
+          if (Array.isArray(precheckList) && precheckList.indexOf(c.code)>=0) cb.checked=true; // auto‑select suggested comps
+          cb.title = c.code+' — '+c.text;
+          const lab=document.createElement('label'); lab.setAttribute('for',id); lab.textContent=c.code; lab.title=cb.title;
+          row.appendChild(cb); row.appendChild(lab); box.appendChild(row);
+        });
+      });
+    }
+
+    function onWeekChanged(weekCode){
+      const input = document.getElementById('dates');
+      if (input) input.value = WEEK_DATES[weekCode] || ""; // instant local
+      google.script.run
+        .withSuccessHandler(function(s){ if (typeof s === "string" && s !== input.value) input.value = s; })
+        .pe_getDatesForWeek(weekCode);
+    }
+
+    function preview(){
+      const q=document.getElementById('week').value;
+      const d=document.getElementById('dates').value.trim();
+      const selDays=selectedDays();
+      document.getElementById('pv').innerHTML =
+        '<b>Week:</b> '+q+'<br><b>Dates:</b> '+(d||'(display only)')+'<br><b>Meeting days:</b> '+(selDays.join(', ')||'(none)');
+    }
+
+    function build(){
+      const q=document.getElementById('week').value;
+      const d=document.getElementById('dates').value.trim();
+      const days=selectedDays();
+      if(!/^Q[1-4]W\d{1,2}$/.test(q)){ status('Choose a week like Q1W3.', false); return; }
+      if(days.length===0){ status('Select at least one meeting day.', false); return; }
+
+      const per=[];
+      for(let i=0;i<days.length;i++){
+        const ocChecked=[]; document.querySelectorAll('[id^="d'+i+'_oc_"]').forEach(cb=>{ if(cb.checked) ocChecked.push(cb.value); });
+        const cpChecked=[]; document.querySelectorAll('[id^="d'+i+'_cp_"]').forEach(cb=>{ if(cb.checked) cpChecked.push(cb.value); });
+        per.push({ oc: ocChecked, cp: cpChecked });
+      }
+
+      setBusy(true); status('Building…');
+      google.script.run
+        .withSuccessHandler(function(res){
+          setBusy(false);
+          if(!res||!res.ok){ status('Build failed.', false); return; }
+          status('Build complete.', true);
+          const list = res.lessons.map(x=>'• <a target="_blank" href="'+x.url+'">'+x.name+'</a>').join('<br>');
+          document.getElementById('pv').innerHTML = '<b>Planner:</b> <a target="_blank" href="'+res.weeklyPlannerUrl+'">open</a><br>'+list;
+        })
+        .withFailureHandler(function(e){ setBusy(false); status('Build error: '+(e&&e.message?e.message:e), false); })
+        .pe_buildWeekFromPositionWithPerDay(q, d||'', days, per);
+    }
+  </script>
+</body>
+</html>
