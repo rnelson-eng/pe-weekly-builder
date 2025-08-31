@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <style>
+    body { font: 13px system-ui, -apple-system, Segoe UI, Roboto, Arial; padding: 10px 12px; }
+    .container { max-width: 1100px; margin: 0 auto; }
+    h2 { margin: 0 0 8px; }
+    .row { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+    select, button { font: inherit; }
+    .box { border:1px solid #e5e7eb; border-radius:8px; padding:10px; margin:10px 0; }
+    .muted { color:#666; font-size:12px; }
+    .task { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px dashed #eee; }
+    .task:last-child { border-bottom:none; }
+    .group-title { font-weight:600; margin:6px 0; }
+    .link { text-decoration:none; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>Weekly To‑Do</h2>
+    <div class="row">
+      <label>Week:</label>
+      <select id="weekSel" onchange="loadWeek()"></select>
+      <button onclick="genAll()" title="Generate all AI tasks for this week">Generate All</button>
+    </div>
+    <div id="meta" class="muted"></div>
+
+    <div id="content" class="box">
+      <div class="muted">Select a week to see tasks…</div>
+    </div>
+  </div>
+
+  <script>
+  let WEEKS=[], CURRENT=null;
+  function status(msg){ document.getElementById('meta').textContent = msg||''; }
+
+  function init(){
+    status("Loading…");
+    google.script.run.withSuccessHandler(function(res){
+      WEEKS = res.weeks || [];
+      const sel = document.getElementById('weekSel');
+      sel.innerHTML = "";
+      WEEKS.forEach(function(w){
+        const opt = document.createElement('option');
+        opt.value = w.week; opt.textContent = w.week + (w.dates? " — "+w.dates : "");
+        sel.appendChild(opt);
+      });
+      status("Ready.");
+      if (WEEKS.length){ loadWeek(); }
+    }).withFailureHandler(function(e){ status("Init error: "+(e && e.message ? e.message : e)); })
+    .pe_todoInit();
+  }
+
+  function loadWeek(){
+    const qweek = document.getElementById('weekSel').value;
+    status("Loading week "+qweek+"…");
+    google.script.run.withSuccessHandler(function(res){
+      CURRENT = res;
+      render();
+      status("Ready.");
+    }).withFailureHandler(function(e){
+      status("Load error: "+(e && e.message ? e.message : e));
+    }).pe_todoLoadWeek(qweek);
+  }
+
+  function render(){
+    const el = document.getElementById('content');
+    el.innerHTML = "";
+    if (!CURRENT) { el.textContent="No data."; return; }
+    if (CURRENT.noLessons){
+      const p = document.createElement('div');
+      p.innerHTML = "<b>No lessons built for "+CURRENT.qweek+"</b>. Open the Weekly Builder to create lessons first.";
+      el.appendChild(p);
+      return;
+    }
+
+    const links = document.createElement('div');
+    if (CURRENT.todoUrl){
+      const a = document.createElement('a'); a.href=CURRENT.todoUrl; a.textContent="Open Weekly TODO"; a.className='link'; a.target='_blank';
+      links.appendChild(a);
+    }
+    if (CURRENT.folderUrl){
+      const a2 = document.createElement('a'); a2.href=CURRENT.folderUrl; a2.textContent="Open Week Folder"; a2.className='link'; a2.style.marginLeft='12px'; a2.target='_blank';
+      links.appendChild(a2);
+    }
+    el.appendChild(links);
+
+    const gAI = document.createElement('div');
+    gAI.className = 'box';
+    gAI.innerHTML = '<div class="group-title">AI‑Generatable</div>';
+    if ((CURRENT.ai||[]).length === 0){
+      const none=document.createElement('div'); none.className='muted'; none.textContent="(none)";
+      gAI.appendChild(none);
+    } else {
+      CURRENT.ai.forEach(function(item, idx){
+        const row=document.createElement('div'); row.className='task';
+        const cb=document.createElement('input'); cb.type='checkbox'; cb.id='ai_'+idx;
+        const label=document.createElement('label'); label.htmlFor=cb.id; label.textContent = item.day+" — "+item.task;
+        const link=document.createElement('a'); link.className='link'; link.target='_blank'; link.style.marginLeft='auto';
+        row.appendChild(cb); row.appendChild(label); row.appendChild(link);
+        gAI.appendChild(row);
+
+        cb.addEventListener('change', function(){
+          if (!cb.checked) return;
+          cb.disabled = true;
+          label.textContent = item.day+" — "+item.task+" (generating…)";
+          google.script.run.withSuccessHandler(function(asset){
+            label.textContent = item.day+" — "+item.task;
+            if (asset && asset.url){ link.href=asset.url; link.textContent="Open"; }
+          }).withFailureHandler(function(e){
+            label.textContent = item.day+" — "+item.task+" (failed)";
+            cb.disabled = false; cb.checked = false;
+            alert("Error: "+(e && e.message ? e.message : e));
+          }).pe_todoGenerate(CURRENT.qweek, item.dnum, item.day, item.task);
+        });
+      });
+    }
+    el.appendChild(gAI);
+
+    const gM = document.createElement('div');
+    gM.className='box';
+    gM.innerHTML = '<div class="group-title">Teacher Tasks</div>';
+    if ((CURRENT.manual||[]).length === 0){
+      const none=document.createElement('div'); none.className='muted'; none.textContent="(none)";
+      gM.appendChild(none);
+    } else {
+      CURRENT.manual.forEach(function(item, idx){
+        const row=document.createElement('div'); row.className='task';
+        const cb=document.createElement('input'); cb.type='checkbox'; cb.id='tm_'+idx;
+        const label=document.createElement('label'); label.htmlFor=cb.id; label.textContent = item.day+" — "+item.task;
+        const link=document.createElement('a'); link.className='link'; link.target='_blank'; link.style.marginLeft='auto';
+        row.appendChild(cb); row.appendChild(label); row.appendChild(link);
+        gM.appendChild(row);
+
+        cb.addEventListener('change', function(){
+          if (!cb.checked) return;
+          cb.disabled = true;
+          label.textContent = item.day+" — "+item.task+" (generating…)";
+          google.script.run.withSuccessHandler(function(asset){
+            label.textContent = item.day+" — "+item.task;
+            if (asset && asset.url){ link.href=asset.url; link.textContent="Open"; }
+          }).withFailureHandler(function(e){
+            label.textContent = item.day+" — "+item.task+" (failed)";
+            cb.disabled = false; cb.checked = false;
+            alert("Error: "+(e && e.message ? e.message : e));
+          }).pe_todoGenerate(CURRENT.qweek, item.dnum, item.day, item.task);
+        });
+      });
+    }
+    el.appendChild(gM);
+  }
+
+  function genAll(){
+    if (!CURRENT || !CURRENT.ai || !CURRENT.ai.length) return;
+    if (!confirm("Generate ALL AI tasks for " + CURRENT.qweek + "?")) return;
+    const items = CURRENT.ai.map(function(x){ return { day:x.day, dnum:x.dnum, task:x.task }; });
+    google.script.run.withSuccessHandler(function(results){
+      results.forEach(function(res, i){
+        if (res && res.ok && res.url){
+          const link = document.querySelector('#ai_'+i).parentElement.querySelector('a.link');
+          if (link){ link.href = res.url; link.textContent = "Open"; }
+          const cb = document.querySelector('#ai_'+i);
+          if (cb){ cb.disabled = true; cb.checked = true; }
+        }
+      });
+      alert("Done generating assets for "+CURRENT.qweek);
+    }).withFailureHandler(function(e){
+      alert("Error: "+(e && e.message ? e.message : e));
+    }).pe_todoGenerateAll(CURRENT.qweek, items);
+  }
+
+  init();
+  </script>
+</body>
+</html>
+<!-- EOF TodoSidebar.html -->

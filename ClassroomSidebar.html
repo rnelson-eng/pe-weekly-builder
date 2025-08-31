@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <style>
+    body { font: 13px system-ui, -apple-system, Segoe UI, Roboto, Arial; padding: 10px 12px; }
+    .container { max-width: 1100px; margin: 0 auto; }
+    h2 { margin: 0 0 8px; }
+    .row { display:flex; align-items:center; gap:12px; margin-bottom:10px; }
+    select, button, input { font: inherit; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border-bottom: 1px solid #eee; padding: 6px 8px; vertical-align: top; }
+    th { text-align:left; position: sticky; top: 0; background: #fff; }
+    .muted { color:#666; font-size:12px; }
+    .nowrap { white-space: nowrap; }
+    .right { text-align:right; }
+    .w-title { width: 38%; }
+    .w-date { width: 14%; }
+    .w-points { width: 8%; }
+    .w-actions { width: 12%; }
+    .link { text-decoration: none; }
+    .pill { display:inline-block; padding:2px 6px; border-radius:999px; background:#f3f4f6; font-size:12px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>Classroom Planner</h2>
+    <div class="row">
+      <label>Course:</label>
+      <select id="courseSel"></select>
+      <label>Week:</label>
+      <select id="weekSel"></select>
+      <button onclick="loadWeek()">Load</button>
+      <span id="status" class="muted"></span>
+      <span style="margin-left:auto"></span>
+      <a id="openFolder" class="link" target="_blank"></a>
+    </div>
+
+    <table id="grid">
+      <thead>
+        <tr>
+          <th class="nowrap">Include</th>
+          <th>Day</th>
+          <th class="w-title">Title</th>
+          <th>Description</th>
+          <th class="w-date">Due (local)</th>
+          <th class="w-date">Schedule Publish (local)</th>
+          <th class="w-points">Points</th>
+          <th class="w-actions">Attachments</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+
+    <div class="row" style="margin-top:12px;">
+      <button onclick="selectAll(true)">Select All</button>
+      <button onclick="selectAll(false)">Clear All</button>
+      <button style="margin-left:auto" onclick="createAssignments()">Create Assignments</button>
+    </div>
+  </div>
+
+<script>
+let WEEKS=[], COURSES=[], DEFAULT_COURSE="", CURRENT=null;
+
+function setStatus(s){ document.getElementById('status').textContent = s||""; }
+
+function init(){
+  setStatus("Loading…");
+  google.script.run.withSuccessHandler(function(res){
+    WEEKS = res.weeks || [];
+    COURSES = res.courses || [];
+    DEFAULT_COURSE = res.defaultCourseId || "";
+    const ws = document.getElementById('weekSel'); ws.innerHTML="";
+    WEEKS.forEach(w => { const o=document.createElement('option'); o.value=w.week; o.textContent=w.week + (w.dates? " — "+w.dates : ""); ws.appendChild(o); });
+    const cs = document.getElementById('courseSel'); cs.innerHTML="";
+    COURSES.forEach(c => { const o=document.createElement('option'); o.value=c.id; o.textContent=c.name; cs.appendChild(o); });
+    if (DEFAULT_COURSE) cs.value = DEFAULT_COURSE;
+    setStatus("Ready.");
+  }).withFailureHandler(e => setStatus((e && e.message ? e.message : e) || "Init failed"))
+  .pe_gcInit();
+}
+
+function loadWeek(){
+  const qweek = document.getElementById('weekSel').value;
+  const courseId = document.getElementById('courseSel').value;
+  setStatus("Loading "+qweek+"…");
+  google.script.run.withSuccessHandler(function(res){
+    CURRENT = res;
+    document.getElementById('openFolder').textContent = res.folderUrl ? "Open Week Folder" : "";
+    document.getElementById('openFolder').href = res.folderUrl || "#";
+    renderGrid();
+    setStatus("Ready.");
+  }).withFailureHandler(e => { setStatus((e && e.message ? e.message : e) || "Load failed"); alert((e && e.message ? e.message : e)); })
+  .pe_gcLoadWeek(qweek, courseId);
+}
+
+function renderGrid(){
+  const tb = document.querySelector('#grid tbody');
+  tb.innerHTML = "";
+  const days = (CURRENT && CURRENT.days) ? CURRENT.days : [];
+  days.forEach((row, i) => {
+    const tr = document.createElement('tr');
+    const tdInc = document.createElement('td');
+    const inc = document.createElement('input'); inc.type='checkbox'; inc.checked = !!row.lesson; inc.id='inc_'+i;
+    tdInc.appendChild(inc); tr.appendChild(tdInc);
+    const tdDay = document.createElement('td'); tdDay.textContent = row.day; tr.appendChild(tdDay);
+    const tdTitle = document.createElement('td'); tdTitle.className='w-title';
+    const title = document.createElement('input'); title.type='text'; title.value=row.title||""; title.style.width='100%'; title.id='title_'+i;
+    tdTitle.appendChild(title); tr.appendChild(tdTitle);
+    const tdDesc = document.createElement('td');
+    const desc = document.createElement('textarea'); desc.value=row.description||""; desc.rows=3; desc.style.width='100%'; desc.id='desc_'+i;
+    tdDesc.appendChild(desc); tr.appendChild(tdDesc);
+    const tdDue = document.createElement('td'); tdDue.className='w-date';
+    const due = document.createElement('input'); due.type='datetime-local'; due.id='due_'+i;
+    if (row.date){
+      const d = new Date(row.date);
+      d.setHours(23, 59, 0, 0);
+      due.value = toLocalInputValue(d);
+    }
+    tdDue.appendChild(due); tr.appendChild(tdDue);
+    const tdSch = document.createElement('td'); tdSch.className='w-date';
+    const sch = document.createElement('input'); sch.type='datetime-local'; sch.id='sch_'+i;
+    if (row.date){
+      const s = new Date(row.date);
+      s.setHours(7, 0, 0, 0);
+      sch.value = toLocalInputValue(s);
+    }
+    tdSch.appendChild(sch); tr.appendChild(tdSch);
+    const tdPts = document.createElement('td'); tdPts.className='w-points';
+    const pts = document.createElement('input'); pts.type='number'; pts.value=100; pts.min=0; pts.max=1000; pts.id='pts_'+i; pts.style.width='70px';
+    tdPts.appendChild(pts); tr.appendChild(tdPts);
+    const tdAtt = document.createElement('td'); tdAtt.className='w-actions';
+    const att = document.createElement('div');
+    const count = (row.assets||[]).length + (row.lesson?1:0);
+    att.textContent = count + " file(s)";
+    if (row.lesson){
+      const a = document.createElement('a'); a.href=row.lesson.url; a.textContent="Lesson"; a.target="_blank"; a.className='link'; a.style.marginLeft='8px';
+      att.appendChild(a);
+    }
+    (row.assets||[]).forEach((aObj, idx) => {
+      const a = document.createElement('a'); a.href=aObj.url; a.textContent="Asset"+(idx+1); a.target="_blank"; a.className='link'; a.style.marginLeft='6px';
+      att.appendChild(a);
+    });
+    tdAtt.appendChild(att); tr.appendChild(tdAtt);
+    tb.appendChild(tr);
+  });
+}
+function toLocalInputValue(date){
+  const pad=n=> String(n).padStart(2,'0');
+  const y = date.getFullYear();
+  const m = pad(date.getMonth()+1);
+  const d = pad(date.getDate());
+  const h = pad(date.getHours());
+  const mi = pad(date.getMinutes());
+  return y+"-"+m+"-"+d+"T"+h+":"+mi;
+}
+function selectAll(v){ document.querySelectorAll('input[id^="inc_"]').forEach(cb => cb.checked = !!v); }
+function createAssignments(){
+  if (!CURRENT) return;
+  const courseId = document.getElementById('courseSel').value;
+  const out = [];
+  (CURRENT.days||[]).forEach((row, i) => {
+    const inc = document.getElementById('inc_'+i).checked;
+    if (!inc) return;
+    const title = document.getElementById('title_'+i).value.trim();
+    const desc = document.getElementById('desc_'+i).value;
+    const dueVal = document.getElementById('due_'+i).value;
+    const schVal = document.getElementById('sch_'+i).value;
+    const pts = Number(document.getElementById('pts_'+i).value||100);
+    out.push({
+      title: title, description: desc, points: pts,
+      lesson: row.lesson || null, assets: row.assets || [],
+      dueISO: dueVal ? new Date(dueVal).toISOString() : null,
+      scheduledISO: schVal ? new Date(schVal).toISOString() : null,
+      publish: false
+    });
+  });
+  if (!out.length){ alert("Select at least one row."); return; }
+  setStatus("Creating "+out.length+" assignment(s)…");
+  google.script.run.withSuccessHandler(function(res){
+    const ok = (res||[]).filter(r=>r.ok).length;
+    const bad = (res||[]).filter(r=>!r.ok);
+    setStatus("Done: "+ok+" created"+(bad.length? (", "+bad.length+" failed") : ""));
+    if (bad.length){ alert("Some failed:\n"+bad.map(x=>"- "+x.title+": "+x.err).join("\n")); }
+  }).withFailureHandler(e => { setStatus("Failed"); alert((e && e.message ? e.message : e)); })
+  .pe_gcCreateAssignments(courseId, CURRENT.qweek, CURRENT.topicName, out);
+}
+init();
+</script>
+</body>
+</html>
+<!-- EOF ClassroomSidebar.html -->
