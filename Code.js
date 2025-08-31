@@ -13,6 +13,22 @@ const PE_WEEKS_SHEET_NAME = "Weeks";
 // Standards index (A..F: StrandCode | StrandName | OutcomeCode | OutcomeTitle | CompCode | CompText)
 const PE_STANDARDS_SHEET_ID = "1kQyTQBxjXjMmN0a0ICrlr0x-k6r_PQN2jpYyDFczQaE";
 
+// District Pacing *Doc* (not Sheet): paste the Google Doc ID of the pacing guide shown in your screenshot
+const PE_PACING_DOC_ID = "1NJsTtOwJc15Fb9LT4tnbN3AtmNFi17ybWrT9ENBulrU";
+
+// Column positions in the pacing table (0-based indexes)
+// Adjust if your table differs. Based on your screenshot:
+// [Week | Dates | Unit Name/Number | EU/EQ | Standards | Lessons | Writing/Tier1 | ODE Checkpoints]
+const PE_PACING_COL_IDX = {
+  WEEK: 0,
+  DATES: 1,
+  UNIT: 2,
+  EQ: 3,
+  STDS: 4,
+  LESSONS: 5
+};
+
+
 // AI model
 const PE_AI_MODEL = "gpt-4o-mini";
 
@@ -117,6 +133,133 @@ function pe_getInitData(){
   const nextIdx = rows.findIndex(x => !/^yes$/i.test(String(x.taught||"")));
   return { rows: rows, nextIndex: nextIdx>=0? nextIdx : 0 };
 }
+/***** Pacing Helper ***********/
+function pe_pacingGetTables_(doc){
+  const body = doc.getBody();
+  const out = [];
+  for (let i=0; i<body.getNumChildren(); i++){
+    const el = body.getChild(i);
+    if (el.getType && el.getType() === DocumentApp.ElementType.TABLE){
+      out.push(el.asTable());
+    }
+  }
+  return out;
+}
+
+function pe_textOfCell_(cell){
+  // returns the concatenated text (trimmed) of a TableCell
+  let s = "";
+  for (let i=0;i<cell.getNumChildren();i++){
+    const ch = cell.getChild(i);
+    if (ch.editAsText) s += ch.asText().getText() + "\n";
+  }
+  return s.replace(/\s+$/,"").trim();
+}
+
+function pe_setCellTextOnce_(cell, text){
+  // Only append if not already present (avoid duplicates)
+  const current = pe_textOfCell_(cell);
+  if (!String(text||"").trim()) return;
+  if (current.indexOf(text) >= 0) return; // already there
+  cell.appendParagraph(text);
+}
+
+function pe_setCellReplaceIfEmpty_(cell, text){
+  // Replace if the cell is empty; otherwise leave as-is
+  const current = pe_textOfCell_(cell);
+  if (current) return;
+  cell.clear();
+  cell.appendParagraph(text || "");
+}
+
+function pe_setWeekHyperlink_(cell, weekCode, url){
+  // Replace the cell text with a single linked run: Q1W1 → link to Weekly Planner
+  cell.clear();
+  const p = cell.appendParagraph(weekCode);
+  const t = p.editAsText();
+  t.setLinkUrl(0, weekCode.length-1, url || null);
+}
+
+function pe_findRowByWeek_(tables, weekCode){
+  for (const tbl of tables){
+    for (let r=0; r<tbl.getNumRows(); r++){
+      const row = tbl.getRow(r);
+      const firstCell = row.getCell(0);
+      const val = pe_textOfCell_(firstCell);
+      if (val && val.replace(/\s+/g,"").toUpperCase() === String(weekCode).toUpperCase()){
+        return { table: tbl, row: row };
+      }
+    }
+  }
+  return null;
+}
+
+// Pull “Essential Question” from the first created lesson doc (from its section in your template)
+function pe_extractEQFromLessonDoc_(docId){
+  try{
+    const doc = DocumentApp.openById(docId);
+    const body = doc.getBody();
+    for (let i=0;i<body.getNumChildren();i++){
+      const el = body.getChild(i);
+      if (el.getType && el.getType() === DocumentApp.ElementType.PARAGRAPH){
+        const p = el.asParagraph();
+        const h = p.getHeading && p.getHeading();
+        if (h === DocumentApp.ParagraphHeading.HEADING2 && /Essential Question/i.test(p.getText())){
+          // next paragraph should be the EQ body
+          if (i+1 < body.getNumChildren()){
+            const next = body.getChild(i+1);
+            if (next.getType() === DocumentApp.ElementType.PARAGRAPH){
+              return next.asParagraph().getText().trim();
+            }
+          }
+        }
+      }
+    }
+  }catch(_){}
+  return ""; // fallback
+}
+
+function pe_updatePacingDocForWeek_(plan, datesStr, weeklyPlannerUrl, lessons){
+  if (!PE_PACING_DOC_ID) return;
+
+  const doc = DocumentApp.openById(PE_PACING_DOC_ID);
+  const tables = pe_pacingGetTables_(doc);
+  const hit = pe_findRowByWeek_(tables, plan.weekCode);
+  if (!hit) { Logger.log("Pacing row not found for "+plan.weekCode); return; }
+
+  const row = hit.row;
+  const IDX = PE_PACING_COL_IDX;
+
+  // 1) Week cell → hyperlink to Weekly Planner
+  pe_setWeekHyperlink_(row.getCell(IDX.WEEK), plan.weekCode, weeklyPlannerUrl);
+
+  // 2) Dates cell → set if empty
+  pe_setCellReplaceIfEmpty_(row.getCell(IDX.DATES), datesStr || plan.dates || "");
+
+  // 3) Unit Name/Number → if empty, use the first day’s title (you can customize mapping later)
+  const unitName = (plan.daily && plan.daily[0] && plan.daily[0].title) ? plan.daily[0].title : "";
+  pe_setCellReplaceIfEmpty_(row.getCell(IDX.UNIT), unitName);
+
+  // 4) EQ → read from the first lesson doc we just created (if present)
+  let eq = "";
+  if (lessons && lessons.length) eq = pe_extractEQFromLessonDoc_(lessons[0].id);
+  pe_setCellReplaceIfEmpty_(row.getCell(IDX.EQ), eq);
+
+  // 5) Standards → union of outcomes/competencies for the week (append if new)
+  const allOutcomes = Array.from(new Set([].concat.apply([], (plan.daily||[]).map(d=>d.outcomes||[]))));
+  const allComps    = Array.from(new Set([].concat.apply([], (plan.daily||[]).map(d=>d.competencies||[]))));
+  const stdLine = (allOutcomes.length? ("OC: "+allOutcomes.join(", ")) : "") + (allComps.length? (" | CP: "+allComps.join(", ")) : "");
+  if (stdLine) pe_setCellTextOnce_(row.getCell(IDX.STDS), stdLine);
+
+  // 6) Lessons → append each lesson title once (avoid duplicates)
+  const lessonsCell = row.getCell(IDX.LESSONS);
+  (plan.daily||[]).forEach(function(d){
+    if (d && d.title) pe_setCellTextOnce_(lessonsCell, d.title);
+  });
+
+  doc.saveAndClose();
+}
+
 
 /***** ===================== YEAR PLAN D1… (curriculum skeleton) ===================== *****/
 const PE_Q1_DAYS = [
@@ -448,39 +591,66 @@ function pe_buildHeuristicLesson_(title, outcomeCodes, compCodes){
 }
 function pe_coerceArray_(x){ return Array.isArray(x)? x : (x? [String(x)] : []); }
 function pe_normalizeLessonJson_(j, title){
+  // Coercers
+  function arr(x){ return Array.isArray(x) ? x.filter(Boolean) : (x ? [x] : []); }
+
   const out = {
     eq: (j && j.eq) ? String(j.eq) : "How does "+(title||"this skill")+" help us solve real problems?",
     eu: (j && j.eu) ? String(j.eu) : "We learn by planning, testing, and iterating.",
-    objectives: pe_coerceArray_(j?.objectives).filter(Boolean).slice(0,3),
+    objectives: arr(j?.objectives).slice(0,3),
     agenda: Array.isArray(j?.agenda)? j.agenda : [],
-    assessment: pe_coerceArray_(j?.assessment),
-    materials: pe_coerceArray_(j?.materials),
-    prep: pe_coerceArray_(j?.prep),
-    differentiation: pe_coerceArray_(j?.differentiation),
-    teacherNotes: pe_coerceArray_(j?.teacherNotes)
+    assessment: arr(j?.assessment),
+    materials: arr(j?.materials),
+    // New explicit channels (prefer explicit; fallback to legacy j.prep split)
+    aiPrep: arr(j?.aiPrep),
+    teacherPrep: arr(j?.teacherPrep),
+    differentiation: arr(j?.differentiation),
+    teacherNotes: arr(j?.teacherNotes)
   };
+
   while(out.objectives.length<3) out.objectives.push("Students will demonstrate understanding via checks for understanding.");
+
   if (!out.agenda.length){
     out.agenda = [
-      {time:"5 min",activity:"Do Now",teacherNotes:"",checks:["2 cold‑calls"]},
-      {time:"15 min",activity:"Direct instruction",teacherNotes:"",checks:["Thumbs‑meter"]},
-      {time:"20 min",activity:"Guided practice",teacherNotes:"",checks:["Checkpoint stamp"]},
-      {time:"10 min",activity:"Share‑out & exit ticket",teacherNotes:"",checks:["Exit ticket"]}
+      {time:"5 min",activity:"Do Now",teacherNotes:"",checks:["2 cold-calls"]},
+      {time:"10 min",activity:"Mini-lesson",teacherNotes:"",checks:["Thumbs-check"]},
+      {time:"25 min",activity:"Guided practice / build",teacherNotes:"",checks:["Circulate; spot-checks"]},
+      {time:"10 min",activity:"Share-outs + Exit Ticket",teacherNotes:"",checks:["Collect exit ticket"]}
     ];
   }
-  out.agenda = out.agenda.map(a=>({
-    time: String(a.time||""), 
-    activity: String(a.activity||""),
-    teacherNotes: String(a.teacherNotes||""),
-    checks: pe_coerceArray_(a.checks).filter(Boolean)
-  }));
+  out.agenda = out.agenda.map(function(a){
+    return {
+      time: String(a.time||""),
+      activity: String(a.activity||""),
+      teacherNotes: String(a.teacherNotes||""),
+      checks: arr(a.checks)
+    };
+  });
+
+  // Fallbacks if AI didn’t separate prep:
+  if (!out.aiPrep.length && !out.teacherPrep.length){
+    var legacy = arr(j?.prep);
+    // Soft split: anything that *sounds* like logistics → teacher; everything else → AI
+    legacy.forEach(function(s){
+      var t = String(s||"").trim();
+      if (!t) return;
+      if (/\b(print|copy|photocopy|stage|set\s*up|open|distribute|collect|upload|post|hang)\b/i.test(t)) out.teacherPrep.push(t);
+      else out.aiPrep.push(t);
+    });
+  }
+
+  // Minimum defaults (avoid injecting “Print handouts” as an AI/Teacher guess unless needed)
+  if (!out.teacherPrep.length) out.teacherPrep = ["Stage materials/tools"];
+  if (!out.aiPrep.length) out.aiPrep = ["Draft student handout"];
+
   if (!out.assessment.length) out.assessment=["Exit ticket","Observation at checkpoints"];
   if (!out.materials.length) out.materials=["Board/slides","Notebook","Handout"];
-  if (!out.prep.length) out.prep=["Print handouts","Stage materials"];
   if (!out.differentiation.length) out.differentiation=["Sentence starters","Tiered tasks"];
   if (!out.teacherNotes.length) out.teacherNotes=["Mind timing; circulate early."];
+
   return out;
 }
+
 function pe_aiGenerateLesson_(dayLabel, dayTitle, outcomeCodes, compCodes){
   var meta=pe_getOutcomeMeta_(), cat=pe_getCompetencyCatalog_();
   var block=(outcomeCodes||[]).map(function(oc){
@@ -490,31 +660,31 @@ function pe_aiGenerateLesson_(dayLabel, dayTitle, outcomeCodes, compCodes){
     return (m.strandCode||"")+" — "+(m.strandName||"")+"\n"+oc+" — "+(m.title||"")+"\n"+compLines;
   }).join("\n\n");
 
+  // STRICT JSON schema includes aiPrep and teacherPrep
   var sys={role:"system",content:
-"You are a CTE engineering teacher’s assistant. Respond with STRICT JSON only. Keys: "+
-"{\"eq\":string,\"eu\":string,\"objectives\":string[3],\"agenda\":[{\"time\":string,\"activity\":string,\"teacherNotes\":string,\"checks\":string[]}],"+
-"\"assessment\":string[],\"materials\":string[],\"prep\":string[],\"differentiation\":string[],\"teacherNotes\":string[]}"+
-". Keep items concise, concrete, classroom‑ready; include accountability checks. No links, no markdown."};
+"You are a CTE engineering teacher’s assistant. Respond with STRICT JSON only, no prose. Use this exact schema:\n"+
+"{\"eq\":string,\n\"eu\":string,\n\"objectives\":string[3],\n\"agenda\":[{\"time\":string,\"activity\":string,\"teacherNotes\":string,\"checks\":string[]}],\n"+
+"\"assessment\":string[],\n\"materials\":string[],\n\"aiPrep\":string[],\n\"teacherPrep\":string[],\n\"differentiation\":string[],\n\"teacherNotes\":string[]}\n"+
+"Guidelines:\n- Keep items concise and classroom-ready.\n- No links, no markdown, no code fences.\n- Put ANYTHING the assistant could draft/build (handouts, worksheets, slides, exit tickets, rubrics, exemplars, prompts, slide text, instructions) in aiPrep.\n- Put logistics the human must do (print, copy, stage tools/materials, setup hardware, open files, distribute, collect) in teacherPrep.\n"};
 
   var usr={role:"user",content:
-"Label: "+dayLabel+"\nTitle: "+dayTitle+
-"\nSelected Standards (only these):\n"+(block||"(none)")+
-"\nOne 50‑minute meeting. Include explicit checks at each agenda step. Return JSON ONLY."};
+"Generate a 1-day lesson plan JSON for '"+(dayTitle||"Lesson")+"' with these standards and competencies:\n"+
+block+"\n\n"+
+"Class length: ~50 minutes. Include:\n- 3 measurable objectives.\n- 4–6 agenda steps with brief checks.\n- assessments, materials.\n- aiPrep (what you can author for me later).\n- teacherPrep (what the teacher must physically do).\n- differentiation and teacherNotes.\nReturn STRICT JSON only."};
 
-  var json = null;
-  try{
-    var raw = pe_aiCall_([sys,usr], true /*wantJSON*/);
-    json = pe_safeJsonParse_(raw);
-  }catch(_){ json = null; }
+  // Call in JSON mode; wantJSON=true enables response_format in pe_aiCall_
+  var raw = pe_aiCall_([sys,usr], true);
+  var json = pe_safeJsonParse_(raw);
 
+  // Retry once if missing critical fields
   if (!(json && json.objectives && json.objectives.length && json.agenda && json.agenda.length)){
     try{
       var usr2 = {role:"user", content:
-        "Re‑issue STRICT JSON (no prose). Ensure exactly 3 objectives and 4‑6 agenda items with checks at each step. Same constraints."};
+        "Re-issue STRICT JSON only. Ensure 3 objectives and 4–6 agenda items. Keep aiPrep and teacherPrep populated per schema."};
       var raw2 = pe_aiCall_([sys,usr,usr2], true);
       var j2 = pe_safeJsonParse_(raw2);
       if (j2) json = j2;
-    }catch(_){ /* ignore */ }
+    }catch(_){}
   }
 
   if (!(json && json.objectives && json.objectives.length && json.agenda && json.agenda.length)){
@@ -522,6 +692,7 @@ function pe_aiGenerateLesson_(dayLabel, dayTitle, outcomeCodes, compCodes){
   }
   return pe_normalizeLessonJson_(json, dayTitle);
 }
+
 
 /***** ===================== DOC CREATION ===================== *****/
 function pe_fillPlaceholders_(body, map){
@@ -538,7 +709,7 @@ function pe_insertStructuredLesson_(doc, data){
   if (m){
     const t = m.getElement().asText();
     t.deleteText(m.getStartOffset(), m.getEndOffsetInclusive());
-    const para = (function elToPara(el){ while(el && el.getType()!==DocumentApp.ElementType.PARAGRAPH){ el=el.getParent(); } return el && el.asParagraph(); })(m.getElement());
+    const para = (function elToPara(el){ while(el && el.getType && el.getType()!==DocumentApp.ElementType.PARAGRAPH){ el = el.getParent && el.getParent(); } return el && el.asParagraph(); })(m.getElement());
     if (para) insertIndex = body.getChildIndex(para);
   }
 
@@ -548,63 +719,57 @@ function pe_insertStructuredLesson_(doc, data){
     if (heading) p.setHeading(heading);
     return p;
   }
-  function insTable(rows){
-    if (insertIndex==null) return body.appendTable(rows);
-    return body.insertTable(++insertIndex, rows);
-  }
-  function insListItem(txt){
-    if (insertIndex==null) return body.appendListItem(txt);
-    return body.insertListItem(++insertIndex, txt);
-  }
-  function insBlank(){ if (insertIndex==null) body.appendParagraph(""); else body.insertParagraph(++insertIndex, ""); }
+  function insBlank(){ insParagraph(""); }
+  function insListItem(txt){ insParagraph(txt).setIndentStart(36); }
 
-  // At a Glance (merged EQ/EU/Objectives)
-  insParagraph("At a Glance", DocumentApp.ParagraphHeading.HEADING2);
-  var glance = insTable([
-    ["Essential Question", data.eq || ""],
-    ["Enduring Understanding", data.eu || ""],
-    ["Objectives (Today)", (data.objectives||[]).slice(0,3).map((o,i)=>(i+1)+". "+o).join("\n")]
-  ]);
-  for (var r=0; r<glance.getNumRows(); r++){ glance.getRow(r).getCell(0).editAsText().setBold(true); }
+  // === CORE SECTIONS (unchanged) ===
+  insParagraph("Essential Question", DocumentApp.ParagraphHeading.HEADING2);
+  insParagraph(data.eq||"");
   insBlank();
 
-  // Agenda & Checks
-  insParagraph("Agenda & Checks", DocumentApp.ParagraphHeading.HEADING2);
-  var agendaTbl = insTable([["Time","Activity","Teacher Notes","Checks for Understanding"]]);
-  agendaTbl.getRow(0).editAsText().setBold(true);
-  for (var c=0; c<agendaTbl.getRow(0).getNumCells(); c++){ agendaTbl.getRow(0).getCell(c).setBackgroundColor("#eeeeee"); }
-  (data.agenda||[]).forEach(a=>{
-    var row = agendaTbl.appendTableRow();
-    row.appendTableCell(a.time||"");
-    row.appendTableCell(a.activity||"");
-    row.appendTableCell(a.teacherNotes||"");
-    row.appendTableCell((a.checks||[]).map(ch=>"• "+ch).join("\n"));
+  insParagraph("Enduring Understanding", DocumentApp.ParagraphHeading.HEADING2);
+  insParagraph(data.eu||"");
+  insBlank();
+
+  insParagraph("Objectives", DocumentApp.ParagraphHeading.HEADING2);
+  (data.objectives||[]).forEach(s=>insListItem("• "+s));
+  insBlank();
+
+  insParagraph("Agenda", DocumentApp.ParagraphHeading.HEADING2);
+  (data.agenda||[]).forEach(function(a){
+    insListItem("• ["+(a.time||"")+"] "+(a.activity||""));
+    (a.checks||[]).forEach(c=>insListItem("   - Check: "+c));
   });
   insBlank();
 
-  // Assessment
-  insParagraph("Assessment / Evidence", DocumentApp.ParagraphHeading.HEADING2);
-  (data.assessment||[]).forEach(s=>insListItem(s));
+  insParagraph("Assessment", DocumentApp.ParagraphHeading.HEADING2);
+  (data.assessment||[]).forEach(s=>insListItem("• "+s));
   insBlank();
 
-  // Materials
   insParagraph("Materials", DocumentApp.ParagraphHeading.HEADING2);
-  (data.materials||[]).forEach(s=>insListItem(s));
-
-  // Prep
-  insParagraph("PREP TODO", DocumentApp.ParagraphHeading.HEADING2);
-  (data.prep||[]).forEach(s=>insListItem("☐ "+s));
+  (data.materials||[]).forEach(s=>insListItem("• "+s));
   insBlank();
 
-  // Differentiation
+  // === NEW: PREP split ===
+  insParagraph("PREP TODO", DocumentApp.ParagraphHeading.HEADING2);
+  if ((data.aiPrep||[]).length){
+    insParagraph("AI-Generatable", DocumentApp.ParagraphHeading.HEADING3);
+    (data.aiPrep||[]).forEach(s=>insListItem("AI: "+s));
+  }
+  if ((data.teacherPrep||[]).length){
+    insParagraph("Teacher Tasks", DocumentApp.ParagraphHeading.HEADING3);
+    (data.teacherPrep||[]).forEach(s=>insListItem(s)); // no prefix needed
+  }
+  insBlank();
+
   insParagraph("Differentiation / Accommodations", DocumentApp.ParagraphHeading.HEADING2);
   (data.differentiation||[]).forEach(s=>insListItem(s));
   insBlank();
 
-  // Teacher Notes
   insParagraph("Teacher Notes", DocumentApp.ParagraphHeading.HEADING2);
   (data.teacherNotes||[]).forEach(s=>insParagraph("– "+s));
 }
+
 function upsertWeeklyPlannerDoc_(weekFolder, plan){
   const name = "Weekly Planner "+plan.weekCode;
   var it=weekFolder.getFilesByName(name);
@@ -769,6 +934,9 @@ function pe_buildWeekFromPositionWithPerDay(qweek, datesStr, selectedDays, perDa
   var lessons = buildDailyLessons_(weekFolder, plan, idx);
   linkWeeklyPlanner_(weeklyPlannerDoc, plan, lessons);
   stampMasterDailyPlan_(idx, qweek, datesStr||"", lessons);
+
+  pe_updatePacingDocForWeek_(plan, datesStr||"", weeklyPlannerDoc.getUrl(), lessons);
+
 
   pe_toast_("Built "+lessons.length+" day(s) into "+qweek+" on ["+meetDays.join(", ")+"] starting at "+rows[idx].day+".");
   return { ok:true, nextStart: rows[idx+lessons.length] ? rows[idx+lessons.length].day : null, weeklyPlannerUrl:weeklyPlannerDoc.getUrl(), lessons: lessons };
