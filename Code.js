@@ -703,71 +703,127 @@ function pe_fillPlaceholders_(body, map){
 function pe_insertStructuredLesson_(doc, data){
   const body = doc.getBody();
 
-  // Find and remove {{AI_BODY}}, remember insertion index
+  // locate {{AI_BODY}} and compute insertion index
   const m = body.findText("\\{\\{AI_BODY\\}\\}");
   let insertIndex = null;
   if (m){
     const t = m.getElement().asText();
     t.deleteText(m.getStartOffset(), m.getEndOffsetInclusive());
-    const para = (function elToPara(el){ while(el && el.getType && el.getType()!==DocumentApp.ElementType.PARAGRAPH){ el = el.getParent && el.getParent(); } return el && el.asParagraph(); })(m.getElement());
+    // walk up to a paragraph to get index
+    function elToPara(el){ while(el && el.getType && el.getType() !== DocumentApp.ElementType.PARAGRAPH){ el = el.getParent(); } return el && el.asParagraph(); }
+    const para = elToPara(m.getElement());
     if (para) insertIndex = body.getChildIndex(para);
   }
 
   function insParagraph(txt, heading){
-    if (insertIndex==null) return body.appendParagraph(txt).setHeading(heading||null);
-    const p = body.insertParagraph(++insertIndex, txt);
-    if (heading) p.setHeading(heading);
-    return p;
+    if (insertIndex==null) {
+      const p = body.appendParagraph(txt);
+      if (heading) p.setHeading(heading);
+      return p;
+    } else {
+      const p = body.insertParagraph(++insertIndex, txt);
+      if (heading) p.setHeading(heading);
+      return p;
+    }
   }
   function insBlank(){ insParagraph(""); }
-  function insListItem(txt){ insParagraph(txt).setIndentStart(36); }
 
-  // === CORE SECTIONS (unchanged) ===
-  insParagraph("Essential Question", DocumentApp.ParagraphHeading.HEADING2);
-  insParagraph(data.eq||"");
-  insBlank();
-
-  insParagraph("Enduring Understanding", DocumentApp.ParagraphHeading.HEADING2);
-  insParagraph(data.eu||"");
-  insBlank();
-
-  insParagraph("Objectives", DocumentApp.ParagraphHeading.HEADING2);
-  (data.objectives||[]).forEach(s=>insListItem("• "+s));
-  insBlank();
-
-  insParagraph("Agenda", DocumentApp.ParagraphHeading.HEADING2);
-  (data.agenda||[]).forEach(function(a){
-    insListItem("• ["+(a.time||"")+"] "+(a.activity||""));
-    (a.checks||[]).forEach(c=>insListItem("   - Check: "+c));
-  });
-  insBlank();
-
-  insParagraph("Assessment", DocumentApp.ParagraphHeading.HEADING2);
-  (data.assessment||[]).forEach(s=>insListItem("• "+s));
-  insBlank();
-
-  insParagraph("Materials", DocumentApp.ParagraphHeading.HEADING2);
-  (data.materials||[]).forEach(s=>insListItem("• "+s));
-  insBlank();
-
-  // === NEW: PREP split ===
-  insParagraph("PREP TODO", DocumentApp.ParagraphHeading.HEADING2);
-  if ((data.aiPrep||[]).length){
-    insParagraph("AI-Generatable", DocumentApp.ParagraphHeading.HEADING3);
-    (data.aiPrep||[]).forEach(s=>insListItem("AI: "+s));
+  // Helper: add list items of a given type
+  
+  // Helper: add list items with glyph types ("bullet" | "number" | "checkbox")
+  function insList(items, mode){
+    items = (items||[]).filter(function(x){ return x!=null && String(x).trim()!==""; });
+    if (!items.length) return;
+    var prefix = (mode === "checkbox") ? "☐ " : "";
+    var glyph  = (mode === "number") ? DocumentApp.GlyphType.NUMBER
+                                     : DocumentApp.GlyphType.BULLET;
+    // first item
+    var first = insParagraph(prefix + items[0]);
+    first.setGlyphType && first.setGlyphType(glyph);
+    for (var i=1;i<items.length;i++){
+      var li = insParagraph(prefix + items[i]);
+      li.setGlyphType && li.setGlyphType(glyph);
+    }
   }
-  if ((data.teacherPrep||[]).length){
-    insParagraph("Teacher Tasks", DocumentApp.ParagraphHeading.HEADING3);
-    (data.teacherPrep||[]).forEach(s=>insListItem(s)); // no prefix needed
+
+  // ===== At a Glance (Q1W2 style table) =====
+  var hasGlance = !!(data?.eq || data?.eu || (data?.objectives||[]).length);
+  if (hasGlance){
+    insParagraph("At a Glance", DocumentApp.ParagraphHeading.HEADING3);
+    var tbl = (insertIndex==null)
+      ? body.appendTable([["Essential Question", data.eq||""],
+                          ["Enduring Understanding", data.eu||""],
+                          ["Objectives (Today)", (data.objectives||[]).map(o=>"• "+o).join("\\n")]])
+      : body.insertTable(++insertIndex, [["Essential Question", data.eq||""],
+                          ["Enduring Understanding", data.eu||""],
+                          ["Objectives (Today)", (data.objectives||[]).map(o=>"• "+o).join("\\n")]]);
+    for (var r=0;r<tbl.getNumRows();r++){ tbl.getRow(r).getCell(0).editAsText().setBold(true); }
+    insBlank();
   }
-  insBlank();
 
-  insParagraph("Differentiation / Accommodations", DocumentApp.ParagraphHeading.HEADING2);
-  (data.differentiation||[]).forEach(s=>insListItem(s));
-  insBlank();
+  // ===== Agenda & Checks (Q1W2 4-column table) =====
+  var agenda = Array.isArray(data?.agenda) ? data.agenda : [];
+  if (agenda.length){
+    insParagraph("Agenda & Checks", DocumentApp.ParagraphHeading.HEADING3);
+    var header = ["Time","Activity","Teacher Notes","Checks for Understanding"];
+    var agTable = (insertIndex==null) ? body.appendTable([header]) : body.insertTable(++insertIndex, [header]);
+    agTable.getRow(0).editAsText().setBold(true);
+    agenda.forEach(function(a){
+      var row = agTable.appendTableRow();
+      row.appendTableCell(String(a.time||""));
+      row.appendTableCell(String(a.activity||""));
+      row.appendTableCell(String(a.teacherNotes||a.notes||""));
+      var checks = Array.isArray(a.checks) ? a.checks : (a.checks ? [a.checks] : []);
+      row.appendTableCell(checks.map(function(c){ return "• "+c; }).join("\\n"));
+    });
+    insBlank();
+  }
 
-  insParagraph("Teacher Notes", DocumentApp.ParagraphHeading.HEADING2);
-  (data.teacherNotes||[]).forEach(s=>insParagraph("– "+s));
+  // ===== Assessment / Evidence =====
+  if ((data?.assessment||[]).length){
+    insParagraph("Assessment / Evidence", DocumentApp.ParagraphHeading.HEADING3);
+    insList(data.assessment, "bullet");
+    insBlank();
+  }
+
+  // ===== Materials =====
+  if ((data?.materials||[]).length){
+    insParagraph("Materials", DocumentApp.ParagraphHeading.HEADING3);
+    insList(data.materials, "number");
+    insBlank();
+  }
+
+  // ===== PREP TODO =====
+  var anyPrep = (data?.aiPrep||[]).length || (data?.teacherPrep||[]).length;
+  if (anyPrep){
+    insParagraph("PREP TODO", DocumentApp.ParagraphHeading.HEADING3);
+    if ((data.aiPrep||[]).length){
+      insParagraph("AI-Generatable", DocumentApp.ParagraphHeading.HEADING4);
+      insList((data.aiPrep||[]).map(function(s){ return "AI: "+s; }), "checkbox");
+    }
+    if ((data.teacherPrep||[]).length){
+      insParagraph("Teacher Tasks", DocumentApp.ParagraphHeading.HEADING4);
+      insList(data.teacherPrep, "checkbox");
+    }
+    insBlank();
+  }
+
+  // ===== Differentiation / Accommodations =====
+  if ((data?.differentiation||[]).length){
+    insParagraph("Differentiation / Accommodations", DocumentApp.ParagraphHeading.HEADING3);
+    insList(data.differentiation, "bullet");
+    insBlank();
+  }
+
+  // ===== Teacher Notes =====
+  if ((data?.teacherNotes||[]).length){
+    insParagraph("Teacher Notes", DocumentApp.ParagraphHeading.HEADING3);
+    insList(data.teacherNotes, "bullet");
+    insBlank();
+  }
+
+  // Footer quick index (helps scannability)
+  insParagraph("\\n\\tAt a Glance \\n\\tAgenda & Checks \\n\\tAssessment / Evidence \\n\\tMaterials \\n\\tPREP TODO \\n\\tDifferentiation / Accommodations \\n\\tTeacher Notes");
 }
 
 function upsertWeeklyPlannerDoc_(weekFolder, plan){
@@ -1187,3 +1243,4 @@ function pe_gcCreateAssignments(courseId, qweek, topicName, items){
   });
   return results;
 }
+
