@@ -68,197 +68,82 @@ function pe_openDialogWide(){
 function pe_toast_(m){ try{ SpreadsheetApp.getActive().toast(m,"Weekly Builder",5);}catch(_){} }
 
 /***** ===================== FOLDER HELPERS ===================== *****/
-function pe_getSingle_(it, err){ if(!it.hasNext()) throw new Error(err); return it.next(); }
-function pe_getTopFolder_(){ return pe_getSingle_(DriveApp.getFoldersByName(PE_COURSE_TOP_FOLDER), "Top folder not found: "+PE_COURSE_TOP_FOLDER); }
-function pe_getYearFolder_(){ const top=pe_getTopFolder_(); return pe_getSingle_(top.getFoldersByName(PE_YEAR_FOLDER_NAME), "Year folder not found: "+PE_YEAR_FOLDER_NAME); }
-function pe_getWeekFolderByName_(name){
-  const y=pe_getYearFolder_(); const it=y.getFoldersByName(name);
-  const f = it.hasNext()? it.next() : y.createFolder(name);
-  try{ f.setSharing(DriveApp.Access.ANYONE_WITH_LINK,DriveApp.Permission.VIEW);}catch(e){}
-  return f;
+function pe_getSingle_(it, err) {
+  return PE.Utils.pe_getSingle_(it, err);
 }
+
+function pe_getTopFolder_() {
+  return PE.Drive.pe_getTopFolder_();
+}
+
+function pe_getYearFolder_() {
+  return PE.Drive.pe_getYearFolder_();
+}
+
+function pe_getWeekFolderByName_(name) {
+  return PE.Drive.pe_getWeekFolderByName_(name);
+}
+
+
 
 /***** ===================== WEEKS (from fixed Sheet) ===================== *****/
-function pe_loadWeeksFromSheet_(){
-  const sh = SpreadsheetApp.openById(PE_WEEKS_SHEET_ID).getSheetByName(PE_WEEKS_SHEET_NAME);
-  if (!sh) throw new Error("Weeks sheet not found: "+PE_WEEKS_SHEET_NAME);
-  const last = sh.getLastRow();
-  if (last < 2) return [];
-  const vals = sh.getRange(2,1,last-1,2).getValues(); // Week | Dates
-  return vals
-    .filter(r => String(r[0]||"").trim())
-    .map(r => ({ week:String(r[0]).trim(), dates:String(r[1]||"").trim() }));
+function pe_loadWeeksFromSheet_() {
+  return PE.Weeks.pe_loadWeeksFromSheet_();
 }
-function pe_collectWeeks_(){ return pe_loadWeeksFromSheet_(); }
-function pe_getDatesForWeek(weekCode){
-  const list = pe_loadWeeksFromSheet_();
-  const hit = (list||[]).find(w => w.week===weekCode);
-  return hit ? (hit.dates||"") : "";
+
+function pe_collectWeeks_() {
+  return PE.Weeks.pe_collectWeeks_();
 }
+
+function pe_getDatesForWeek(weekCode) {
+  return PE.Weeks.pe_getDatesForWeek(weekCode);
+}
+
 
 /***** ===================== MASTER DAILY PLAN ===================== *****/
-function pe_buildMasterDailyPlanner(){
-  const ss = SpreadsheetApp.getActive();
-  if (ss.getName() !== PE_MASTER_SHEET_TITLE) ss.rename(PE_MASTER_SHEET_TITLE);
-
-  let sh = ss.getSheetByName("Master Daily Plan");
-  if (!sh) sh = ss.insertSheet("Master Daily Plan"); else sh.clear();
-
-  const headers = ["Day #","Lesson Title","Outcome/Strand Codes","Week Taught (Q#W#)","Date Taught","Taught?","Resources","Notes"];
-  sh.getRange(1,1,1,headers.length).setValues([headers]).setFontWeight("bold"); sh.setFrozenRows(1);
-
-  const allDays = [].concat(PE_Q1_DAYS, PE_Q2_DAYS, PE_Q3_DAYS, PE_Q4_DAYS);
-  const rows = allDays.map((d,i) => [ "D"+(i+1), d.title, (d.codes||[]).join(", "), "", "", "", "", "" ]);
-  if (rows.length) sh.getRange(2,1,rows.length,headers.length).setValues(rows);
-  sh.autoResizeColumns(1, headers.length);
-  pe_toast_("Master Daily Plan refreshed ("+rows.length+" days).");
+function pe_buildMasterDailyPlanner() {
+  return PE.MasterPlanner.pe_buildMasterDailyPlanner();
 }
-function pe_getInitData(){
-  const ss=SpreadsheetApp.getActive();
-  let sh = ss.getSheetByName("Master Daily Plan");
-  if(!sh) throw new Error("Master Daily Plan not found. Run the builder first.");
-  const hdr=sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0]||[];
-  const cDay=hdr.indexOf("Day #")+1, cTitle=hdr.indexOf("Lesson Title")+1, cCodes=hdr.indexOf("Outcome/Strand Codes")+1, cTaught=hdr.indexOf("Taught?")+1, cWeek=hdr.indexOf("Week Taught (Q#W#)")+1, cDate=hdr.indexOf("Date Taught")+1;
-  const last=sh.getLastRow(); const rows=[];
-  for(var r=2;r<=last;r++){
-    rows.push({
-      day: sh.getRange(r,cDay||1).getDisplayValue(),
-      title: sh.getRange(r,cTitle||2).getDisplayValue(),
-      codes: sh.getRange(r,cCodes||3).getDisplayValue(),
-      taught: cTaught? sh.getRange(r,cTaught).getDisplayValue() : "",
-      qweek: cWeek? sh.getRange(r,cWeek).getDisplayValue() : "",
-      date: cDate? sh.getRange(r,cDate).getDisplayValue() : ""
-    });
-  }
-  const nextIdx = rows.findIndex(x => !/^yes$/i.test(String(x.taught||"")));
-  return { rows: rows, nextIndex: nextIdx>=0? nextIdx : 0 };
+
+function pe_getInitData() {
+  return PE.MasterPlanner.pe_getInitData();
 }
+
 /***** Pacing Helper ***********/
-function pe_pacingGetTables_(doc){
-  const body = doc.getBody();
-  const out = [];
-  for (let i=0; i<body.getNumChildren(); i++){
-    const el = body.getChild(i);
-    if (el.getType && el.getType() === DocumentApp.ElementType.TABLE){
-      out.push(el.asTable());
-    }
-  }
-  return out;
+function pe_pacingGetTables_(doc) {
+  return PE.Pacing.pe_pacingGetTables_(doc);
 }
 
-function pe_textOfCell_(cell){
-  // returns the concatenated text (trimmed) of a TableCell
-  let s = "";
-  for (let i=0;i<cell.getNumChildren();i++){
-    const ch = cell.getChild(i);
-    if (ch.editAsText) s += ch.asText().getText() + "\n";
-  }
-  return s.replace(/\s+$/,"").trim();
+function pe_textOfCell_(cell) {
+  return PE.Pacing.pe_textOfCell_(cell);
 }
 
-function pe_setCellTextOnce_(cell, text){
-  // Only append if not already present (avoid duplicates)
-  const current = pe_textOfCell_(cell);
-  if (!String(text||"").trim()) return;
-  if (current.indexOf(text) >= 0) return; // already there
-  cell.appendParagraph(text);
+function pe_setCellTextOnce_(cell, text) {
+  return PE.Pacing.pe_setCellTextOnce_(cell, text);
 }
 
-function pe_setCellReplaceIfEmpty_(cell, text){
-  // Replace if the cell is empty; otherwise leave as-is
-  const current = pe_textOfCell_(cell);
-  if (current) return;
-  cell.clear();
-  cell.appendParagraph(text || "");
+function pe_setCellReplaceIfEmpty_(cell, text) {
+  return PE.Pacing.pe_setCellReplaceIfEmpty_(cell, text);
 }
 
-function pe_setWeekHyperlink_(cell, weekCode, url){
-  // Replace the cell text with a single linked run: Q1W1 → link to Weekly Planner
-  cell.clear();
-  const p = cell.appendParagraph(weekCode);
-  const t = p.editAsText();
-  t.setLinkUrl(0, weekCode.length-1, url || null);
+function pe_setWeekHyperlink_(cell, weekCode, url) {
+  return PE.Pacing.pe_setWeekHyperlink_(cell, weekCode, url);
 }
 
-function pe_findRowByWeek_(tables, weekCode){
-  for (const tbl of tables){
-    for (let r=0; r<tbl.getNumRows(); r++){
-      const row = tbl.getRow(r);
-      const firstCell = row.getCell(0);
-      const val = pe_textOfCell_(firstCell);
-      if (val && val.replace(/\s+/g,"").toUpperCase() === String(weekCode).toUpperCase()){
-        return { table: tbl, row: row };
-      }
-    }
-  }
-  return null;
+function pe_findRowByWeek_(tables, weekCode) {
+  return PE.Pacing.pe_findRowByWeek_(tables, weekCode);
 }
+
 
 // Pull “Essential Question” from the first created lesson doc (from its section in your template)
-function pe_extractEQFromLessonDoc_(docId){
-  try{
-    const doc = DocumentApp.openById(docId);
-    const body = doc.getBody();
-    for (let i=0;i<body.getNumChildren();i++){
-      const el = body.getChild(i);
-      if (el.getType && el.getType() === DocumentApp.ElementType.PARAGRAPH){
-        const p = el.asParagraph();
-        const h = p.getHeading && p.getHeading();
-        if (h === DocumentApp.ParagraphHeading.HEADING2 && /Essential Question/i.test(p.getText())){
-          // next paragraph should be the EQ body
-          if (i+1 < body.getNumChildren()){
-            const next = body.getChild(i+1);
-            if (next.getType() === DocumentApp.ElementType.PARAGRAPH){
-              return next.asParagraph().getText().trim();
-            }
-          }
-        }
-      }
-    }
-  }catch(_){}
-  return ""; // fallback
+function pe_extractEQFromLessonDoc_(docId) {
+  return PE.DocsCore.pe_extractEQFromLessonDoc_(docId);
 }
 
-function pe_updatePacingDocForWeek_(plan, datesStr, weeklyPlannerUrl, lessons){
-  if (!PE_PACING_DOC_ID) return;
-
-  const doc = DocumentApp.openById(PE_PACING_DOC_ID);
-  const tables = pe_pacingGetTables_(doc);
-  const hit = pe_findRowByWeek_(tables, plan.weekCode);
-  if (!hit) { Logger.log("Pacing row not found for "+plan.weekCode); return; }
-
-  const row = hit.row;
-  const IDX = PE_PACING_COL_IDX;
-
-  // 1) Week cell → hyperlink to Weekly Planner
-  pe_setWeekHyperlink_(row.getCell(IDX.WEEK), plan.weekCode, weeklyPlannerUrl);
-
-  // 2) Dates cell → set if empty
-  pe_setCellReplaceIfEmpty_(row.getCell(IDX.DATES), datesStr || plan.dates || "");
-
-  // 3) Unit Name/Number → if empty, use the first day’s title (you can customize mapping later)
-  const unitName = (plan.daily && plan.daily[0] && plan.daily[0].title) ? plan.daily[0].title : "";
-  pe_setCellReplaceIfEmpty_(row.getCell(IDX.UNIT), unitName);
-
-  // 4) EQ → read from the first lesson doc we just created (if present)
-  let eq = "";
-  if (lessons && lessons.length) eq = pe_extractEQFromLessonDoc_(lessons[0].id);
-  pe_setCellReplaceIfEmpty_(row.getCell(IDX.EQ), eq);
-
-  // 5) Standards → union of outcomes/competencies for the week (append if new)
-  const allOutcomes = Array.from(new Set([].concat.apply([], (plan.daily||[]).map(d=>d.outcomes||[]))));
-  const allComps    = Array.from(new Set([].concat.apply([], (plan.daily||[]).map(d=>d.competencies||[]))));
-  const stdLine = (allOutcomes.length? ("OC: "+allOutcomes.join(", ")) : "") + (allComps.length? (" | CP: "+allComps.join(", ")) : "");
-  if (stdLine) pe_setCellTextOnce_(row.getCell(IDX.STDS), stdLine);
-
-  // 6) Lessons → append each lesson title once (avoid duplicates)
-  const lessonsCell = row.getCell(IDX.LESSONS);
-  (plan.daily||[]).forEach(function(d){
-    if (d && d.title) pe_setCellTextOnce_(lessonsCell, d.title);
-  });
-
-  doc.saveAndClose();
+function pe_updatePacingDocForWeek_(plan, datesStr, weeklyPlannerUrl, lessons) {
+  return PE.Pacing.pe_updatePacingDocForWeek_(plan, datesStr, weeklyPlannerUrl, lessons);
 }
+
 
 
 /***** ===================== YEAR PLAN D1… (curriculum skeleton) ===================== *****/
@@ -414,136 +299,44 @@ const PE_Q4_DAYS = [
 ];
 
 /***** ===================== STANDARDS LOOKUP ===================== *****/
-function parseOutcomeList_(s){
-  var toks = String(s||"").split(/[ ,;\n]+/).map(x=>x.trim()).filter(Boolean);
-  var outcomes = [], comps = [];
-  toks.forEach(function(t){
-    if (/^\d+\.\d+\.\d+$/.test(t)) comps.push(t);
-    else if (/^\d+\.\d+$/.test(t)) outcomes.push(t);
-    else if (/^\d+\.\dx$/.test(t) || /x$/.test(t)) outcomes.push(t);
-    else outcomes.push(t);
-  });
-  var seenO={}, seenC={};
-  outcomes = outcomes.filter(v => (seenO[v]? false : (seenO[v]=true)));
-  comps    = comps.filter(v => (seenC[v]? false : (seenC[v]=true)));
-  return { outcomes, comps };
-}
-function pe_getStandardsForUI(){
-  var sh = SpreadsheetApp.openById(PE_STANDARDS_SHEET_ID).getActiveSheet();
-  var last = sh.getLastRow();
-  var vals = last > 1 ? sh.getRange(2,1,last-1,6).getValues() : [];
-  var seen = {};
-  var outcomes = [];
-  var compsByOutcome = {};
-  vals.forEach(function(r){
-    var sc=String(r[0]||"").trim(), sn=String(r[1]||"").trim();
-    var oc=String(r[2]||"").trim(), ot=String(r[3]||"").trim();
-    var cc=String(r[4]||"").trim(), ct=String(r[5]||"").trim();
-    if (oc && !seen[oc]) { outcomes.push({code:oc, title:ot, strandCode:sc, strandName:sn}); seen[oc]=true; }
-    if (oc && (cc||ct)) { if(!compsByOutcome[oc]) compsByOutcome[oc]=[]; compsByOutcome[oc].push({code:cc, text:ct}); }
-  });
-  outcomes.sort((a,b)=>a.code.localeCompare(b.code, undefined, {numeric:true}));
-  Object.keys(compsByOutcome).forEach(k => compsByOutcome[k].sort((a,b)=>a.code.localeCompare(b.code, undefined, {numeric:true})));
-  return { outcomes, compsByOutcome };
-}
-function pe_getOutcomeMeta_(){
-  var sh = SpreadsheetApp.openById(PE_STANDARDS_SHEET_ID).getActiveSheet();
-  var last = sh.getLastRow();
-  var vals = last > 1 ? sh.getRange(2,1,last-1,6).getValues() : [];
-  var meta={};
-  vals.forEach(function(r){
-    var sc=String(r[0]||"").trim(), sn=String(r[1]||"").trim();
-    var oc=String(r[2]||"").trim(), ot=String(r[3]||"").trim();
-    if(oc && !meta[oc]) meta[oc]={strandCode:sc,strandName:sn,title:ot};
-  });
-  return meta;
-}
-function pe_getCompetencyCatalog_(){
-  var sh = SpreadsheetApp.openById(PE_STANDARDS_SHEET_ID).getActiveSheet();
-  var last = sh.getLastRow();
-  var vals = last > 1 ? sh.getRange(2,1,last-1,6).getValues() : [];
-  var byOutcome = {};
-  vals.forEach(function(r){
-    var oc=String(r[2]||"").trim(); if(!oc) return;
-    var code=String(r[4]||"").trim(); var text=String(r[5]||"").trim();
-    if(!byOutcome[oc]) byOutcome[oc]=[];
-    if(code||text) byOutcome[oc].push({code:code,text:text});
-  });
-  return byOutcome;
-}
-function pe_renderStandards_(outcomeCodes, selectedCompCodes){
-  var codes={}; (selectedCompCodes||[]).forEach(c => codes[String(c)]=true);
-  var sh=SpreadsheetApp.openById(PE_STANDARDS_SHEET_ID).getActiveSheet();
-  var last = sh.getLastRow();
-  var vals = last > 1 ? sh.getRange(2,1,last-1,6).getValues() : [];
-  var byOutcome={};
-  vals.forEach(function(r){
-    var sc=String(r[0]||"").trim(), sn=String(r[1]||"").trim();
-    var oc=String(r[2]||"").trim(), ot=String(r[3]||"").trim();
-    var cc=String(r[4]||"").trim(), ct=String(r[5]||"").trim();
-    if(!oc) return;
-    if(!byOutcome[oc]) byOutcome[oc]={strandCode:sc,strandName:sn,outcomeTxt:ot,comps:[]};
-    if(cc||ct) byOutcome[oc].comps.push({code:cc,text:ct});
-  });
-  var lines=[];
-  (outcomeCodes||[]).forEach(function(oc){
-    var e=byOutcome[oc];
-    if(!e){ lines.push("("+oc+") — no competencies found"); lines.push(""); return; }
-    lines.push(e.strandCode+" — "+e.strandName);
-    lines.push(oc+" — "+e.outcomeTxt);
-    var chosen=e.comps.filter(c=>codes[c.code]);
-    if(chosen.length===0) lines.push("• (no specific competencies selected)");
-    else chosen.forEach(c=>lines.push("• "+c.code+" — "+c.text));
-    lines.push("");
-  });
-  return lines.join("\n");
+function parseOutcomeList_(s) {
+  return PE.Standards.parseOutcomeList_(s);
 }
 
+function pe_getStandardsForUI() {
+  return PE.Standards.pe_getStandardsForUI();
+}
+
+function pe_getOutcomeMeta_() {
+  return PE.Standards.pe_getOutcomeMeta_();
+}
+
+function pe_getCompetencyCatalog_() {
+  return PE.Standards.pe_getCompetencyCatalog_();
+}
+
+function pe_renderStandards_(outcomeCodes, selectedCompCodes) {
+  return PE.Standards.pe_renderStandards_(outcomeCodes, selectedCompCodes);
+}
+
+
 /***** ===================== AI (JSON mode + heuristic fallback) ===================== *****/
-function pe_aiPromptForKey(){
-  const ui=SpreadsheetApp.getUi();
-  const r=ui.prompt("Enter OpenAI API Key","Format: sk-...", ui.ButtonSet.OK_CANCEL);
-  if(r.getSelectedButton()!==ui.Button.OK) return;
-  const k=(r.getResponseText()||"").trim();
-  if(!/^sk-/.test(k)){ ui.alert("That doesn’t look like an OpenAI key."); return; }
-  PropertiesService.getScriptProperties().setProperty("PE_OPENAI_KEY",k);
-  ui.alert("Saved.");
+function pe_aiPromptForKey() {
+  return PE.AI.pe_aiPromptForKey();
 }
-function pe_aiGetKey_(){ return PropertiesService.getScriptProperties().getProperty("PE_OPENAI_KEY")||""; }
-function pe_aiDiagnostics(){
-  const k=pe_aiGetKey_(); if(!k){ pe_toast_("No OpenAI key set."); return; }
-  const ok = pe_aiCall_([{role:"user", content:"Reply with 'ok'"}], false);
-  pe_toast_(String(ok).trim().toLowerCase()==="ok"?"AI OK":"AI unexpected response");
+
+function pe_aiGetKey_() {
+  return PE.AI.pe_aiGetKey_();
 }
-function pe_aiCall_(messages, wantJSON){
-  const key=pe_aiGetKey_(); if(!key) throw new Error("OpenAI API key not set.");
-  const models=[PE_AI_MODEL,"gpt-4o-mini","gpt-4o"]; let lastErr=null;
-  for (var i=0;i<models.length;i++){
-    const model=models[i];
-    try{
-      const payload={
-        model,
-        messages,
-        temperature:0.2,
-        ...(wantJSON ? { response_format:{ type:"json_object" } } : {})
-      };
-      const res=UrlFetchApp.fetch("https://api.openai.com/v1/chat/completions",{
-        method:"post",
-        contentType:"application/json",
-        headers:{Authorization:"Bearer "+key},
-        muteHttpExceptions:true,
-        payload:JSON.stringify(payload)
-      });
-      const code=res.getResponseCode(), body=res.getContentText();
-      if(code<200||code>=300) throw new Error("HTTP "+code+": "+body);
-      const json=JSON.parse(body);
-      const msg=(json && json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content)||"";
-      if(!String(msg).trim()) throw new Error("Empty completion");
-      return msg;
-    }catch(e){ lastErr=e; }
-  }
-  throw new Error("All models failed. Last error: "+lastErr);
+
+function pe_aiDiagnostics() {
+  return PE.AI.pe_aiDiagnostics();
 }
+
+function pe_aiCall_(messages, wantJSON) {
+  return PE.AI.pe_aiCall_(messages, wantJSON);
+}
+
 function pe_safeJsonParse_(s){ try{ return JSON.parse(s); }catch(_){ return null; } }
 function pe_buildHeuristicLesson_(title, outcomeCodes, compCodes){
   const meta = pe_getOutcomeMeta_();
@@ -592,7 +385,10 @@ function pe_buildHeuristicLesson_(title, outcomeCodes, compCodes){
 function pe_coerceArray_(x){ return Array.isArray(x)? x : (x? [String(x)] : []); }
 function pe_normalizeLessonJson_(j, title){
   // Coercers
-  function arr(x){ return Array.isArray(x) ? x.filter(Boolean) : (x ? [x] : []); }
+function arr(x) {
+  return PE.Utils.arr(x);
+}
+
 
   const out = {
     eq: (j && j.eq) ? String(j.eq) : "How does "+(title||"this skill")+" help us solve real problems?",
@@ -710,41 +506,29 @@ function pe_insertStructuredLesson_(doc, data){
     const t = m.getElement().asText();
     t.deleteText(m.getStartOffset(), m.getEndOffsetInclusive());
     // walk up to a paragraph to get index
-    function elToPara(el){ while(el && el.getType && el.getType() !== DocumentApp.ElementType.PARAGRAPH){ el = el.getParent(); } return el && el.asParagraph(); }
+function elToPara(el) {
+  return PE.DocsCore.elToPara(el);
+}
+
     const para = elToPara(m.getElement());
     if (para) insertIndex = body.getChildIndex(para);
   }
+function insParagraph(txt, heading) {
+  return PE.DocsCore.insParagraph(txt, heading);
+}
 
-  function insParagraph(txt, heading){
-    if (insertIndex==null) {
-      const p = body.appendParagraph(txt);
-      if (heading) p.setHeading(heading);
-      return p;
-    } else {
-      const p = body.insertParagraph(++insertIndex, txt);
-      if (heading) p.setHeading(heading);
-      return p;
-    }
-  }
-  function insBlank(){ insParagraph(""); }
+function insBlank() {
+  return PE.DocsCore.insBlank();
+}
+
 
   // Helper: add list items of a given type
   
   // Helper: add list items with glyph types ("bullet" | "number" | "checkbox")
-  function insList(items, mode){
-    items = (items||[]).filter(function(x){ return x!=null && String(x).trim()!==""; });
-    if (!items.length) return;
-    var prefix = (mode === "checkbox") ? "☐ " : "";
-    var glyph  = (mode === "number") ? DocumentApp.GlyphType.NUMBER
-                                     : DocumentApp.GlyphType.BULLET;
-    // first item
-    var first = insParagraph(prefix + items[0]);
-    first.setGlyphType && first.setGlyphType(glyph);
-    for (var i=1;i<items.length;i++){
-      var li = insParagraph(prefix + items[i]);
-      li.setGlyphType && li.setGlyphType(glyph);
-    }
-  }
+function insList(items, mode) {
+  return PE.DocsCore.insList(items, mode);
+}
+
 
   // ===== At a Glance (Q1W2 style table) =====
   var hasGlance = !!(data?.eq || data?.eu || (data?.objectives||[]).length);
@@ -825,99 +609,22 @@ function pe_insertStructuredLesson_(doc, data){
   // Footer quick index (helps scannability)
   insParagraph("\\n\\tAt a Glance \\n\\tAgenda & Checks \\n\\tAssessment / Evidence \\n\\tMaterials \\n\\tPREP TODO \\n\\tDifferentiation / Accommodations \\n\\tTeacher Notes");
 }
-
-function upsertWeeklyPlannerDoc_(weekFolder, plan){
-  const name = "Weekly Planner "+plan.weekCode;
-  var it=weekFolder.getFilesByName(name);
-  var doc = it.hasNext()? DocumentApp.openById(it.next().getId()) : DocumentApp.create(name);
-  if(!it.hasNext()) DriveApp.getFileById(doc.getId()).moveTo(weekFolder);
-  try{ DriveApp.getFileById(doc.getId()).setSharing(DriveApp.Access.ANYONE_WITH_LINK,DriveApp.Permission.VIEW);}catch(e){}
-  var b=doc.getBody(); b.clear();
-  b.appendParagraph("Weekly Planner — "+plan.weekCode).setHeading(DocumentApp.ParagraphHeading.HEADING1);
-  b.appendParagraph(plan.dates||"").setHeading(DocumentApp.ParagraphHeading.HEADING2);
-  b.appendParagraph("");
-  var t=b.appendTable([["Day","Topic / Lesson Link","Competencies","Notes"]]); t.getRow(0).editAsText().setBold(true);
-  var dayLabels=["Mon","Tue","Wed","Thu","Fri"];
-  for (var i=0;i<dayLabels.length;i++){
-    var d = dayLabels[i];
-    var r=t.appendTableRow(); r.appendTableCell(d); r.appendTableCell(""); r.appendTableCell(""); r.appendTableCell("");
-    if ((plan.meetDays||[]).indexOf(d)===-1) { for (var c=0;c<r.getNumCells();c++) r.getCell(c).setBackgroundColor("#f2f2f2"); }
-  }
-  doc.saveAndClose();
-  return doc;
+function upsertWeeklyPlannerDoc_(weekFolder, plan) {
+  return PE.WeeklyDoc.upsertWeeklyPlannerDoc_(weekFolder, plan);
 }
-function linkWeeklyPlanner_(weeklyPlannerDoc, plan, created){
-  var doc=DocumentApp.openById(weeklyPlannerDoc.getId()); var b=doc.getBody();
-  var byDay={}; created.forEach(x=>byDay[x.dayName]=x);
-  var codesByDay={}; (plan.daily||[]).forEach(d=>codesByDay[d.dayName]=d.competencies||[]);
-  for(var i=0;i<b.getNumChildren();i++){
-    var el=b.getChild(i); if(el.getType()!==DocumentApp.ElementType.TABLE) continue;
-    var tbl=el.asTable();
-    for(var r=1;r<tbl.getNumRows();r++){
-      var row=tbl.getRow(r); var day=row.getCell(0).getText().trim();
-      var lesson=byDay[day];
-      var topic=row.getCell(1); topic.clear();
-      if(lesson){ var p=topic.appendParagraph(lesson.name); p.editAsText().setLinkUrl(0,lesson.name.length-1,lesson.url); }
-      else topic.appendParagraph("(no class)");
-      var comp=row.getCell(2); comp.clear();
-      var codes=codesByDay[day]||[]; comp.appendParagraph(codes.length? codes.join(", "):"(none selected)");
-    }
-    break;
-  }
-  doc.saveAndClose();
+
+function linkWeeklyPlanner_(weeklyPlannerDoc, plan, created) {
+  return PE.DocsCore.linkWeeklyPlanner_(weeklyPlannerDoc, plan, created);
 }
-function stampMasterDailyPlan_(startIndex, qweek, datesStr, lessons){
-  var ss=SpreadsheetApp.getActive(); var sh=ss.getSheetByName("Master Daily Plan"); if(!sh) return;
-  var hdr=sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0];
-  var cWeek=hdr.indexOf("Week Taught (Q#W#)")+1, cDate=hdr.indexOf("Date Taught")+1, cTaught=hdr.indexOf("Taught?")+1, cRes=hdr.indexOf("Resources")+1;
-  lessons.forEach(function(d,i){
-    var row = 2 + (startIndex+i);
-    if(cWeek) sh.getRange(row,cWeek).setValue(qweek);
-    if(cDate) sh.getRange(row,cDate).setValue(datesStr);
-    if(cTaught) sh.getRange(row,cTaught).setValue("Yes");
-    if(cRes) sh.getRange(row,cRes).setValue(d.url);
-  });
+
+function stampMasterDailyPlan_(startIndex, qweek, datesStr, lessons) {
+  return PE.MasterPlanner.stampMasterDailyPlan_(startIndex, qweek, datesStr, lessons);
 }
-function buildDailyLessons_(weekFolder, plan, startIndex){
-  if(!PE_LESSON_TEMPLATE_DOC_ID) throw new Error("Set PE_LESSON_TEMPLATE_DOC_ID to your template Doc ID.");
-  var out=[];
-  for(var i=0;i<plan.daily.length;i++){
-    var d=plan.daily[i], dnum=startIndex+i+1;
-    var docName = "Lesson Plan — "+plan.weekCode+" — "+d.dayName+" — D"+dnum+" — "+d.title;
 
-    // Replace existing (to avoid stale content)
-    var existing = weekFolder.getFilesByName(docName);
-    if (existing.hasNext()) { try{ existing.next().setTrashed(true);}catch(_){ } }
-
-    var copy = DriveApp.getFileById(PE_LESSON_TEMPLATE_DOC_ID).makeCopy(docName, weekFolder);
-    var docId = copy.getId();
-
-    var doc = DocumentApp.openById(docId);
-    var body = doc.getBody();
-
-    var std = pe_renderStandards_(d.outcomes, d.competencies);
-
-    var aiData = {};
-    try{ if (pe_aiGetKey_()) aiData = pe_aiGenerateLesson_("D"+dnum, d.title, d.outcomes, d.competencies) || {}; }catch(e){ aiData = {}; }
-
-    pe_fillPlaceholders_(body, {
-      WEEK: plan.weekCode,
-      DAYNAME: d.dayName,
-      DLABEL: "D"+dnum,
-      TITLE: d.title,
-      DATE: plan.dates || "",
-      CLASS_LENGTH: "45–55 min",
-      STANDARDS_BLOCK: std,
-      AI_BODY: "{{AI_BODY}}"
-    });
-    pe_insertStructuredLesson_(doc, aiData);
-
-    doc.saveAndClose();
-    try{ DriveApp.getFileById(docId).setSharing(DriveApp.Access.ANYONE_WITH_LINK,DriveApp.Permission.VIEW);}catch(e){}
-    out.push({ name: docName, url: doc.getUrl(), dayName: d.dayName, dnum: dnum });
-  }
-  return out;
+function buildDailyLessons_(weekFolder, plan, startIndex) {
+  return PE.MasterPlanner.buildDailyLessons_(weekFolder, plan, startIndex);
 }
+
 
 /***** ===================== SUGGESTIONS & UI INIT ===================== *****/
 function pe_peekNextDays_(n){
@@ -1017,230 +724,77 @@ function pe_openClassroomPlannerDialogWide(){
 }
 
 /***** ===================== WEEK FILE LISTING (used by To‑Do/Classroom) ===================== *****/
-function pe_listWeekFiles_(qweek){
-  try{
-    var folder = pe_getWeekFolderByName_(qweek);
-    var it = folder.getFiles();
-    var days = {Mon:[],Tue:[],Wed:[],Thu:[],Fri:[]};
-    var lessons = {};
-    while (it.hasNext()){
-      var f = it.next();
-      var name = f.getName();
-      var dayMatch = name.match(/—\s*(Mon|Tue|Wed|Thu|Fri)\s*—/i);
-      if (!dayMatch) continue;
-      var day = dayMatch[1];
-      if (/^Lesson Plan\s+—\s+/i.test(name)){
-        lessons[day] = { id:f.getId(), url:f.getUrl(), name:name };
-      } else if (/^Asset\s+—\s+/i.test(name)){
-        days[day] = days[day] || [];
-        days[day].push({ id:f.getId(), url:f.getUrl(), name:name });
-      }
-    }
-    return { folderUrl: (folder && folder.getUrl && folder.getUrl()) || "", lessons: lessons, assetsByDay: days };
-  }catch(e){
-    Logger.log("pe_listWeekFiles_ error: "+e);
-    return { folderUrl: "", lessons: {}, assetsByDay: {Mon:[],Tue:[],Wed:[],Thu:[],Fri:[]} };
-  }
+function pe_listWeekFiles_(qweek) {
+  return PE.Weekly.pe_listWeekFiles_(qweek);
 }
+
 
 /***** ===================== PREP TODO PARSER ===================== *****/
 var PE_TODO = (function(){
-  function isNoiseTodoLine(t){
-    var raw = String(t||"").trim();
-    if (!raw) return true;
-    raw = raw.replace(/^[\u2610\u2611\-\–\—•\u2022\.\s]+/, "").trim();
-    if (!raw) return true;
-    var lower = raw.toLowerCase();
-    if (lower.length < 4) return true;
-    if (/^(tbd|n\/a|na|none|placeholder)$/.test(lower)) return true;
-    if (!/[a-z]/i.test(lower)) return true;
-    if (/^[swx]+$/.test(lower) && lower.length <= 6) return true;
-    var letters = lower.replace(/[^a-z]/g, "");
-    if (letters.length >= 3) {
-      var counts = {}; for (var i=0;i<letters.length;i++){ var ch = letters.charAt(i); counts[ch] = (counts[ch]||0)+1; }
-      var max = 0; for (var k in counts){ if (counts[k] > max) max = counts[k]; }
-      if (max / letters.length >= 0.8) return true;
-    }
-    if (!/[aeiou]/.test(lower) && lower.length <= 4) return true;
-    return false;
-  }
-  function readPrepFromDoc(docId){
-    try{
-      if (!docId) return [];
-      var doc = DocumentApp.openById(docId);
-      var body = doc.getBody();
-      var n = body.getNumChildren();
-      var hit = -1;
-      for (var i=0;i<n;i++){
-        var el = body.getChild(i);
-        if (el && el.getType && el.getType() === DocumentApp.ElementType.PARAGRAPH){
-          var para = el.asParagraph();
-          var txt = (para.getText()||"").trim();
-          if (/^PREP\s+TODO$/i.test(txt)){ hit = i; break; }
-        }
-      }
-      if (hit < 0) return [];
-      var out = [];
-      for (var j=hit+1;j<n;j++){
-        var el2 = body.getChild(j);
-        if (!el2) break;
-        if (el2.getType() === DocumentApp.ElementType.PARAGRAPH){
-          var p2 = el2.asParagraph();
-          var h = p2.getHeading();
-          var t = (p2.getText()||"").trim();
-          if (h === DocumentApp.ParagraphHeading.HEADING1 || h === DocumentApp.ParagraphHeading.HEADING2){ break; }
-          if (t){ t = t.replace(/^[\u2610\s\-–—•\u2022]+/, '').trim(); if (!isNoiseTodoLine(t)) out.push(t); }
-        } else if (el2.getType() === DocumentApp.ElementType.LIST_ITEM){
-          var li = el2.asListItem();
-          var lt = (li.getText()||"").trim();
-          if (lt){ lt = lt.replace(/^[\u2610\s\-–—•\u2022]+/, '').trim(); if (!isNoiseTodoLine(lt)) out.push(lt); }
-        }
-      }
-      return out.filter(Boolean);
-    }catch(e){ Logger.log("readPrepFromDoc error: "+e); return []; }
-  }
-  function categorizePrepTasks(items){
-    var ai = [], manual = [];
-    var rxAIHint = /\b(create|draft|write|design|generate|compose|worksheet|handout|reflection|exit\s*ticket|quiz|rubric|slides?)\b/i;
-    (items||[]).forEach(function(s){
-      var t = String(s||"").trim(); if (!t) return;
-      if (isNoiseTodoLine(t)) return;
-      if (/^AI\s*:/.test(t)) { ai.push(t.replace(/^AI\s*:/i,'' ).trim()); return; }
-      if (rxAIHint.test(t)) ai.push(t); else manual.push(t);
-    });
-    return { ai: ai, manual: manual };
-  }
+function isNoiseTodoLine(t) {
+  return PE.Todo.isNoiseTodoLine(t);
+}
+
+function readPrepFromDoc(docId) {
+  return PE.Todo.readPrepFromDoc(docId);
+}
+
+function categorizePrepTasks(items) {
+  return PE.Todo.categorizePrepTasks(items);
+}
+
   return { isNoiseTodoLine:isNoiseTodoLine, readPrepFromDoc:readPrepFromDoc, categorizePrepTasks:categorizePrepTasks };
 })();
 
 /***** ===================== To‑Do ENDPOINTS ===================== *****/
-function pe_todoInit(){ return { weeks: pe_collectWeeks_() }; }
-function pe_todoLoadWeek(qweek){
-  var folder = pe_getWeekFolderByName_(qweek);
-  var it = folder.getFiles();
-  var lessons = [];
-  while (it.hasNext()){
-    var f = it.next(); var name = f.getName();
-    if (/^Lesson Plan\s+—\s+/i.test(name) && name.indexOf("— "+qweek+" —")>=0){
-      var dayMatch = name.match(/—\s*(Mon|Tue|Wed|Thu|Fri)\s*—/i);
-      var dMatch = name.match(/—\s*D(\d+)\s*—/i);
-      lessons.push({ id:f.getId(), url:f.getUrl(), name:name, dayName: (dayMatch?dayMatch[1]:""), dnum: (dMatch?Number(dMatch[1]):null) });
-    }
-  }
-  lessons.sort(function(a,b){ return (a.dnum||0) - (b.dnum||0); });
-  if (!lessons.length){
-    var todoUrl = ""; try{ var itn = folder.getFilesByName("Weekly TODO — "+qweek); if (itn.hasNext()) todoUrl = DriveApp.getFileById(itn.next().getId()).getUrl(); }catch(_){}
-    return { qweek:qweek, noLessons:true, ai:[], manual:[], todoUrl: todoUrl, folderUrl: folder.getUrl() };
-  }
-  var ai=[], manual=[];
-  lessons.forEach(function(ls){
-    var items = PE_TODO.readPrepFromDoc(ls.id) || [];
-    items = (items||[]).filter(function(x){ return !PE_TODO.isNoiseTodoLine || !PE_TODO.isNoiseTodoLine(x); });
-    var cat = PE_TODO.categorizePrepTasks(items);
-    (cat.ai||[]).forEach(function(t){ ai.push({ day:ls.dayName, dnum:ls.dnum, task:t, lessonId:ls.id }); });
-    (cat.manual||[]).forEach(function(t){ manual.push({ day:ls.dayName, dnum:ls.dnum, task:t }); });
-  });
-  var todoUrl = ""; try{ var it2 = folder.getFilesByName("Weekly TODO — "+qweek); if (it2.hasNext()) todoUrl = DriveApp.getFileById(it2.next().getId()).getUrl(); }catch(_){}
-  return { qweek:qweek, ai:ai, manual:manual, todoUrl:todoUrl, folderUrl:folder.getUrl() };
+function pe_todoInit() {
+  return PE.Todo.pe_todoInit();
 }
-function pe_todoGenerate(qweek, dnum, dayName, task){
-  var folder = pe_getWeekFolderByName_(qweek);
-  var ctx = (typeof PE_getDayContextFromMaster_==='function'? PE_getDayContextFromMaster_(dnum) : { title:"", outcomes:[], competencies:[] });
-  var meta = (typeof pe_getOutcomeMeta_==='function'? pe_getOutcomeMeta_() : {});
-  var cat  = (typeof pe_getCompetencyCatalog_==='function'? pe_getCompetencyCatalog_() : {});
-  var ocBlock = (ctx.outcomes||[]).map(function(oc){
-    var m = meta[oc]||{};
-    var comps = (cat[oc]||[]).filter(function(c){ return (ctx.competencies||[]).indexOf(c.code) >= 0; });
-    var lines = comps.length ? comps.map(function(c){ return "• "+c.code+" — "+c.text; }).join("\\n") : "• (no specific competencies selected)";
-    return (m.strandCode||"")+" — "+(m.strandName||"")+"\\n"+oc+" — "+(m.title||"")+"\\n"+lines;
-  }).join("\\n\\n");
-  var sys = {role:"system", content:"You are a CTE engineering teacher's assistant. Produce clean, student-facing plain text (no markdown). Keep it 1 page whenever possible."};
-  var usr = {role:"user", content:"Create the following classroom asset as plain text for Google Docs.\\n"+
-    "Task: "+task+"\\nWeek: "+qweek+"\\nDay: "+(dayName||"")+"\\nLesson Title: "+(ctx.title||"")+"\\n\\nStandards Context:\\n"+ocBlock+"\\n\\nRequirements:\\n- Be student-facing and actionable.\\n- Numbered prompts or sections when applicable.\\n- If relevant, include a simple 2–4 point rubric at the end.\\n- No markdown, no code fences, no links.\\n"};
-  var raw = (typeof pe_aiCall_==='function'? (pe_aiCall_([sys, usr], false) || "") : "");
-  raw = String(raw||"").trim() || ("Directions:\\n1) "+task+"\\n\\n(Add OPENAI_API_KEY to Script Properties to enable AI.)");
-  var short = (typeof PE_TODO.prettyTaskLabel==='function'? PE_TODO.prettyTaskLabel(task, ctx.title || "Student Handout") : task);
-  var name = "Asset — "+qweek+" — "+dayName+" — "+short;
-  var it = pe_getWeekFolderByName_(qweek).getFilesByName(name);
-  var doc = it.hasNext() ? DocumentApp.openById(it.next().getId()) : DocumentApp.create(name);
-  if (!it.hasNext()) DriveApp.getFileById(doc.getId()).moveTo(pe_getWeekFolderByName_(qweek));
-  try{ DriveApp.getFileById(doc.getId()).setSharing(DriveApp.Access.ANYONE_WITH_LINK,DriveApp.Permission.VIEW);}catch(e){}
-  var b = doc.getBody(); b.clear();
-  b.appendParagraph(short).setHeading(DocumentApp.ParagraphHeading.HEADING1);
-  b.appendParagraph((ctx.title||"")).setHeading(DocumentApp.ParagraphHeading.HEADING2);
-  b.appendParagraph(""); b.appendParagraph(raw);
-  doc.saveAndClose();
-  return { id: doc.getId(), url: doc.getUrl(), name: name };
+
+function pe_todoLoadWeek(qweek) {
+  return PE.Todo.pe_todoLoadWeek(qweek);
 }
-function pe_todoGenerateAll(qweek, items){
-  var out = [];
-  (items||[]).forEach(function(it){
-    try{ var res = pe_todoGenerate(qweek, it.dnum, it.day, it.task); out.push({ ok:true, task:it.task, url:res.url, day:it.day, dnum:it.dnum }); }
-    catch(e){ out.push({ ok:false, task:it.task, err:String(e) }); }
-  });
-  return out;
+
+function pe_todoGenerate(qweek, dnum, dayName, task) {
+  return PE.Todo.pe_todoGenerate(qweek, dnum, dayName, task);
 }
+
+function pe_todoGenerateAll(qweek, items) {
+  return PE.Todo.pe_todoGenerateAll(qweek, items);
+}
+
 
 /***** ===================== CLASSROOM HELPERS + ENDPOINTS ===================== *****/
 function gc_listMyCourses_() {
-  try {
-    var res = Classroom.Courses.list({ teacherId: "me" });
-    return (res.courses || []).map(function(c){ return {id:c.id, name:c.name}; });
-  } catch (e) { Logger.log("gc_listMyCourses_ error: " + e); return []; }
+  return PE.Classroom.gc_listMyCourses_();
 }
+
 function gc_getOrCreateTopic_(courseId, name) {
-  var existing = Classroom.Courses.Topics.list(courseId);
-  var hit = (existing.topic || []).find(function(t){ return t.name === name; });
-  if (hit) return hit.id;
-  var created = Classroom.Courses.Topics.create({ name: name }, courseId);
-  return created.id;
+  return PE.Classroom.gc_getOrCreateTopic_(courseId, name);
 }
-function gc_fileIdFromUrl_(url){ var m = String(url||"").match(/[-\\w]{25,}/); return m ? m[0] : ""; }
-function gc_driveMaterial_(fileId){ return { driveFile: { driveFile: { id: fileId } } }; }
+
+function gc_fileIdFromUrl_(url) {
+  return PE.Classroom.gc_fileIdFromUrl_(url);
+}
+
+function gc_driveMaterial_(fileId) {
+  return PE.Classroom.gc_driveMaterial_(fileId);
+}
+
 function gc_upsertAssignment_(courseId, payload) {
-  var list = Classroom.Courses.CourseWork.list(courseId, { courseWorkStates: ["PUBLISHED","DRAFT"] });
-  var existing = (list.courseWork || []).find(function(cw){ return cw.title === payload.title; });
-  if (existing) {
-    var patchMask = "title,description,dueDate,dueTime,topicId,materials,maxPoints,state,scheduledTime";
-    return Classroom.Courses.CourseWork.patch(payload, courseId, existing.id, { updateMask: patchMask });
-  } else { return Classroom.Courses.CourseWork.create(payload, courseId); }
+  return PE.Classroom.gc_upsertAssignment_(courseId, payload);
 }
-function pe_gcInit(){
-  var courses = []; try { courses = gc_listMyCourses_(); } catch(e){ Logger.log(e); }
-  return { courses: courses, defaultCourseId: (typeof GC_COURSE_ID!=='undefined' && GC_COURSE_ID) ? GC_COURSE_ID : ((courses[0] && courses[0].id) || ""), weeks: pe_collectWeeks_() };
+
+function pe_gcInit() {
+  return PE.Classroom.pe_gcInit();
 }
-function pe_gcLoadWeek(qweek, courseId){
-  try{
-    var files = pe_listWeekFiles_(qweek);
-    var topicName = String(qweek).replace(/(\\d)W(\\d)/i, "$1 W$2");
-    var days = ["Mon","Tue","Wed","Thu","Fri"];
-    var rows = [];
-    for (var i=0;i<days.length;i++){
-      var d = days[i];
-      var lesson = files.lessons[d] || null;
-      var assets = files.assetsByDay[d] || [];
-      var title = "["+qweek+"] " + d + ": " + (lesson ? lesson.name.replace(/^Lesson Plan\\s+—\\s+[^—]+\\s+—\\s+[^—]+\\s+—\\s+\\w+\\s+—\\s*/,'') : "Lesson");
-      var desc = "Week: "+qweek+"\\nDay: "+d+"\\n(Attached: lesson + assets)";
-      rows.push({ day:d, dnum:null, date: null, title:title, description:desc, lesson:lesson, assets:assets });
-    }
-    return { qweek: qweek, topicName: topicName, days: rows, folderUrl: files.folderUrl, courseId: courseId || "" };
-  }catch(e){ throw new Error("pe_gcLoadWeek failed: "+e); }
+
+function pe_gcLoadWeek(qweek, courseId) {
+  return PE.Classroom.pe_gcLoadWeek(qweek, courseId);
 }
-function pe_gcCreateAssignments(courseId, qweek, topicName, items){
-  if (!courseId) throw new Error("No course selected.");
-  var topicId = gc_getOrCreateTopic_(courseId, topicName);
-  var results = [];
-  (items||[]).forEach(function(it){
-    try{
-      var materials = [];
-      if (it.lesson && it.lesson.url){ var fid = gc_fileIdFromUrl_(it.lesson.url); if (fid) materials.push(gc_driveMaterial_(fid)); }
-      (it.assets||[]).forEach(function(a){ var fid = gc_fileIdFromUrl_(a.url); if (fid) materials.push(gc_driveMaterial_(fid)); });
-      var payload = { title: it.title, description: it.description || "", workType: "ASSIGNMENT", materials: materials, topicId: topicId, maxPoints: Number(it.points || 100), state: it.scheduledISO ? "DRAFT" : (it.publish ? "PUBLISHED" : "DRAFT") };
-      if (it.scheduledISO){ payload.scheduledTime = it.scheduledISO; }
-      var res = gc_upsertAssignment_(courseId, payload);
-      results.push({ ok:true, id: (res && res.id) || "", title: payload.title });
-    }catch(e){ results.push({ ok:false, title: it.title, err: String(e) }); }
-  });
-  return results;
+
+function pe_gcCreateAssignments(courseId, qweek, topicName, items) {
+  return PE.Classroom.pe_gcCreateAssignments(courseId, qweek, topicName, items);
 }
+
 
